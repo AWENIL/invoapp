@@ -20,7 +20,7 @@ flutter pub get
 flutter run
 ```
 
-По умолчанию используется **`https://api.invotaxi.ukudarov.pro`** (см. `lib/config/env.dart`).
+По умолчанию используется **`https://api.invotaxi.ukudarov.pro`** (мобильное API: `/api/mobile/`, см. `lib/config/env.dart`).
 
 Локальный бэкенд:
 
