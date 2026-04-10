@@ -5,4 +5,5 @@ const String apiBaseUrl = String.fromEnvironment(
   defaultValue: 'https://api.invotaxi.ukudarov.pro',
 );
 
-String get mobileApiPrefix => '$apiBaseUrl/api/mobile';
+/// С завершающим `/`, иначе Dio склеивает `.../mobile` + `auth/...` → `.../mobileauth/...`
+String get mobileApiPrefix => '$apiBaseUrl/api/mobile/';

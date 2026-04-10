@@ -59,8 +59,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Invotaxi — водитель')),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -90,7 +91,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 const SizedBox(height: 12),
                 Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
               ],
-              const Spacer(),
+              const SizedBox(height: 32),
               if (!_codeSent)
                 FilledButton(
                   onPressed: _loading ? null : _sendOtp,
