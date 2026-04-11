@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'providers/app_providers.dart';
 import 'screens/driver_shell.dart';
 import 'screens/login_screen.dart';
+import 'services/driver_location_sync.dart';
 import 'theme/invo_theme.dart';
 
 void main() {
@@ -21,7 +22,8 @@ class InvoDriverApp extends ConsumerWidget {
       title: 'Invotaxi Водитель',
       theme: InvoTheme.dark(),
       home: session.when(
-        data: (s) => s == null ? const LoginScreen() : const DriverShell(),
+        data: (s) =>
+            s == null ? const LoginScreen() : const SessionLocationBinder(child: DriverShell()),
         loading: () => const Scaffold(
           body: Center(child: CircularProgressIndicator()),
         ),

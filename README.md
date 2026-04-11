@@ -20,16 +20,16 @@ flutter pub get
 flutter run
 ```
 
-По умолчанию используется **`https://api.invotaxi.ukudarov.pro`** (мобильное API: `/api/mobile/`, см. `lib/config/env.dart`).
+По умолчанию используется **локальный** бэкенд **`http://127.0.0.1:8000`** (мобильное API: `/api/mobile/`, см. `lib/config/env.dart`). Убедитесь, что Django запущен на `0.0.0.0:8000`.
 
-Локальный бэкенд:
+Продакшен API:
 
 ```text
-flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
+flutter run --dart-define=API_BASE_URL=https://api.invotaxi.ukudarov.pro
 ```
 
-- **Android-эмулятор** к Django на ПК: `API_BASE_URL=http://10.0.2.2:8000`
-- **Физическое устройство** в той же Wi‑Fi: `http://<IP-вашего-ПК>:8000`
+- **Android-эмулятор** к Django на ПК: `flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000`
+- **Физическое устройство** в той же Wi‑Fi: `--dart-define=API_BASE_URL=http://<IP-вашего-ПК>:8000`
 
 ## Возможности
 

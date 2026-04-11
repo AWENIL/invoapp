@@ -129,6 +129,18 @@ class InvoApi {
     return r.data!;
   }
 
+  Future<Map<String, dynamic>> patchDriverProfile(Map<String, dynamic> data) async {
+    try {
+      final r = await _dio.patch<Map<String, dynamic>>('drivers/profile/', data: data);
+      if (r.statusCode != 200 || r.data == null) {
+        throw Exception(_err(r.data, 'Не удалось сохранить профиль'));
+      }
+      return r.data!;
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Не удалось сохранить профиль'));
+    }
+  }
+
   Future<Map<String, dynamic>> patchOnlineStatus(bool isOnline) async {
     final r = await _dio.patch<Map<String, dynamic>>(
       'drivers/online-status/',
@@ -144,10 +156,23 @@ class InvoApi {
     await _dio.patch('drivers/location/', data: {'lat': lat, 'lon': lon});
   }
 
-  Future<Map<String, dynamic>> getOrders({String? status}) async {
+  /// Ответ совпадает с телом заказа и флагом [has_active_order], либо только
+  /// `{ "has_active_order": false, "order": null }` если поездки нет.
+  Future<Map<String, dynamic>> getActiveOrder() async {
+    final r = await _dio.get<Map<String, dynamic>>('drivers/active-order/');
+    if (r.statusCode != 200 || r.data == null) {
+      throw Exception(_err(r.data, 'Активный заказ'));
+    }
+    return r.data!;
+  }
+
+  Future<Map<String, dynamic>> getOrders({String? status, int? limit}) async {
     final r = await _dio.get<Map<String, dynamic>>(
       'drivers/orders/',
-      queryParameters: {if (status != null && status.isNotEmpty) 'status': status},
+      queryParameters: {
+        if (status != null && status.isNotEmpty) 'status': status,
+        if (limit != null) 'limit': limit,
+      },
     );
     if (r.statusCode != 200 || r.data == null) {
       throw Exception(_err(r.data, 'Список заказов'));
@@ -193,6 +218,53 @@ class InvoApi {
       throw Exception(_err(r.data, 'Маршрут'));
     }
     return r.data!;
+  }
+
+  /// Маршрут до точки забора: при [fromLat]/[fromLon] считается от этих координат (GPS), иначе — с сервера.
+  /// Возвращает `null`, если маршрут недоступен.
+  Future<Map<String, dynamic>?> getOrderRouteToPickup(
+    String orderId, {
+    double? fromLat,
+    double? fromLon,
+  }) async {
+    try {
+      final q = <String, dynamic>{};
+      if (fromLat != null) q['from_lat'] = fromLat;
+      if (fromLon != null) q['from_lon'] = fromLon;
+      final r = await _dio.get<Map<String, dynamic>>(
+        'orders/$orderId/route-to-pickup/',
+        queryParameters: q.isEmpty ? null : q,
+      );
+      if (r.statusCode != 200 || r.data == null) return null;
+      return r.data!;
+    } on DioException catch (e) {
+      final code = e.response?.statusCode;
+      if (code == 400 || code == 403 || code == 404) return null;
+      throw Exception(_err(e.response?.data, 'Маршрут до забора'));
+    }
+  }
+
+  /// Маршрут до точки высадки: при [fromLat]/[fromLon] — от GPS, иначе с сервера.
+  Future<Map<String, dynamic>?> getOrderRouteToDropoff(
+    String orderId, {
+    double? fromLat,
+    double? fromLon,
+  }) async {
+    try {
+      final q = <String, dynamic>{};
+      if (fromLat != null) q['from_lat'] = fromLat;
+      if (fromLon != null) q['from_lon'] = fromLon;
+      final r = await _dio.get<Map<String, dynamic>>(
+        'orders/$orderId/route-to-dropoff/',
+        queryParameters: q.isEmpty ? null : q,
+      );
+      if (r.statusCode != 200 || r.data == null) return null;
+      return r.data!;
+    } on DioException catch (e) {
+      final code = e.response?.statusCode;
+      if (code == 400 || code == 403 || code == 404) return null;
+      throw Exception(_err(e.response?.data, 'Маршрут до высадки'));
+    }
   }
 
   Future<void> patchOrderStatus(String orderId, String status, {String? reason}) async {

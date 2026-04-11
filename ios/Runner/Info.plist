@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Геолокация нужна диспетчеру, чтобы видеть ваше положение на линии.</string>
 </dict>
 </plist>
