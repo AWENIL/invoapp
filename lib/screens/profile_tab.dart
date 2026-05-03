@@ -6,7 +6,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../config/env.dart';
 import '../providers/app_providers.dart';
-import '../providers/driver_profile_extras_providers.dart';
 import '../theme/driver_auth_theme.dart';
 import 'driver_notifications_screen.dart';
 import 'driver_personal_info_screen.dart';
@@ -38,7 +37,6 @@ class ProfileTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final session = ref.watch(sessionProvider);
-    final darkMode = ref.watch(driverThemeModeProvider) == ThemeMode.dark;
     final hubBg = theme.brightness == Brightness.light
         ? const Color(0xFFF2F2F7)
         : theme.scaffoldBackgroundColor;
@@ -135,45 +133,6 @@ class ProfileTab extends ConsumerWidget {
                       MaterialPageRoute<void>(builder: (_) => const DriverNotificationsScreen()),
                     );
                   },
-                ),
-                const SizedBox(height: 10),
-                Material(
-                  color: theme.cardTheme.color ?? theme.colorScheme.surface,
-                  borderRadius: BorderRadius.circular(14),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: theme.colorScheme.outline.withValues(alpha: 0.22),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        const SizedBox(width: 8),
-                        Icon(
-                          Icons.dark_mode_outlined,
-                          color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Text(
-                            'Тёмная тема',
-                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Switch.adaptive(
-                          value: darkMode,
-                          activeThumbColor: Colors.white,
-                          activeTrackColor: DriverAuthColors.primary,
-                          onChanged: (v) {
-                            ref.read(driverThemeModeProvider.notifier).state =
-                                v ? ThemeMode.dark : ThemeMode.light;
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
                 const SizedBox(height: 36),
                 InkWell(

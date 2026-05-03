@@ -80,7 +80,19 @@ class _DriverGeoFirstRootState extends ConsumerState<_DriverGeoFirstRoot> {
 
     final session = ref.watch(sessionProvider);
     final themeMode = ref.watch(driverThemeModeProvider);
+    // Сброс стека навигатора при входе: иначе после успешного OTP остаётся маршрут
+    // «телефон → код» поверх MaterialApp и главный экран не виден.
+    final materialKey = session.when(
+      data: (s) {
+        if (s == null) return 'auth_stack';
+        final id = s.profile['id'];
+        return 'driver_${id ?? 'unknown'}';
+      },
+      loading: () => 'session_loading',
+      error: (e, _) => 'session_error',
+    );
     return MaterialApp(
+      key: ValueKey<String>(materialKey),
       debugShowCheckedModeBanner: false,
       title: 'Invotaxi Водитель',
       theme: DriverAuthTheme.material(),

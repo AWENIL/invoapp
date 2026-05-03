@@ -3,29 +3,61 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../providers/app_providers.dart';
+import '../widgets/driver_order_complaint_sheet.dart';
 import 'order_detail_screen.dart';
 
 String _statusLabelRu(String code) {
   const labels = {
-    'completed': 'Завершён',
-    'cancelled': 'Отменён',
+    'completed': 'Завершено',
+    'cancelled': 'Отменено',
     'no_show': 'Неявка',
     'incident': 'Инцидент',
+    'rejected': 'Отклонён',
+    'draft': 'Черновик',
+    'submitted': 'Отправлен',
+    'awaiting_dispatcher_decision': 'На решении',
+    'created': 'Создан',
+    'matching': 'Подбор',
+    'active_queue': 'В очереди',
+    'offered': 'Предложение',
   };
   return labels[code] ?? code;
 }
 
-String _compactOrderId(String id) {
-  if (id.length <= 14) return id;
-  return '${id.substring(0, 6)}…${id.substring(id.length - 4)}';
+( Color bg, Color fg ) _statusBadgeColors(String status, ColorScheme scheme) {
+  switch (status) {
+    case 'completed':
+      return (const Color(0xFFFFE5E0), const Color(0xFFC62828));
+    case 'cancelled':
+    case 'rejected':
+    case 'no_show':
+      return (scheme.surfaceContainerHighest, scheme.onSurfaceVariant);
+    default:
+      return (scheme.surfaceContainerHighest, scheme.onSurface);
+  }
 }
 
-String _historyTimeLine(Map<String, dynamic> o) {
+String _orderDisplayNo(String id) {
+  final parts = id.split('-');
+  if (parts.length >= 5) {
+    final a = parts[1].length >= 2 ? parts[1].substring(0, 2) : parts[1];
+    final b = parts[4].length >= 2 ? parts[4].substring(parts[4].length - 2) : parts[4];
+    return '№${a.toUpperCase()}-${b.toUpperCase()}';
+  }
+  if (id.length <= 12) return '№$id';
+  return '№${id.substring(0, 6)}…${id.substring(id.length - 2)}';
+}
+
+String _historyWhenLine(Map<String, dynamic> o) {
   final raw = o['completed_at'] ?? o['desired_pickup_time'] ?? o['created_at'];
   if (raw == null || raw.toString().isEmpty) return '';
   final dt = DateTime.tryParse(raw.toString());
   if (dt == null) return raw.toString();
   final local = dt.toLocal();
+  final now = DateTime.now();
+  if (local.year == now.year && local.month == now.month && local.day == now.day) {
+    return 'Сегодня · ${DateFormat('HH:mm').format(local)}';
+  }
   return DateFormat('d.MM.yyyy · HH:mm').format(local);
 }
 
@@ -35,6 +67,7 @@ class DriverHistoryTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    const primaryOrange = Color(0xFFFF6B44);
     final async = ref.watch(driverHistoryOrdersProvider);
 
     return Scaffold(
@@ -55,18 +88,18 @@ class DriverHistoryTab extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'История',
+                          'История поездок',
                           style: theme.textTheme.headlineSmall?.copyWith(
                             fontWeight: FontWeight.w700,
                             color: theme.colorScheme.onSurface,
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 8),
                         Text(
-                          'Завершённые и отменённые заказы.',
+                          'Жалобу можно подать в течение 7 дней после завершения. Видео хранится столько же.',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                            height: 1.35,
+                            height: 1.4,
                           ),
                         ),
                       ],
@@ -99,7 +132,13 @@ class DriverHistoryTab extends ConsumerWidget {
                           final id = o['id']?.toString() ?? '';
                           final status = o['status']?.toString() ?? '';
                           final pickup = o['pickup_title']?.toString() ?? '';
-                          final timeLine = _historyTimeLine(o);
+                          final dropObj = o['dropoff_object_name']?.toString().trim();
+                          final dropTitle = o['dropoff_title']?.toString() ?? '';
+                          final dropLine = (dropObj != null && dropObj.isNotEmpty) ? dropObj : dropTitle;
+                          final timeLine = _historyWhenLine(o);
+                          final w = o['waiting_time_minutes'];
+                          final durStr = w is num && w > 0 ? '${w.round()} мин' : '—';
+                          final badgeColors = _statusBadgeColors(status, theme.colorScheme);
 
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 12),
@@ -120,7 +159,7 @@ class DriverHistoryTab extends ConsumerWidget {
                                   decoration: BoxDecoration(
                                     borderRadius: BorderRadius.circular(14),
                                     border: Border.all(
-                                      color: theme.colorScheme.outline.withValues(alpha: 0.25),
+                                      color: theme.colorScheme.outline.withValues(alpha: 0.22),
                                     ),
                                   ),
                                   padding: const EdgeInsets.all(16),
@@ -128,6 +167,7 @@ class DriverHistoryTab extends ConsumerWidget {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                           Expanded(
                                             child: Text(
@@ -140,13 +180,14 @@ class DriverHistoryTab extends ConsumerWidget {
                                           Container(
                                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                             decoration: BoxDecoration(
-                                              color: theme.colorScheme.surfaceContainerHighest,
+                                              color: badgeColors.$1,
                                               borderRadius: BorderRadius.circular(20),
                                             ),
                                             child: Text(
                                               _statusLabelRu(status),
                                               style: theme.textTheme.labelSmall?.copyWith(
                                                 fontWeight: FontWeight.w600,
+                                                color: badgeColors.$2,
                                               ),
                                             ),
                                           ),
@@ -154,9 +195,34 @@ class DriverHistoryTab extends ConsumerWidget {
                                       ),
                                       const SizedBox(height: 12),
                                       Text(
-                                        pickup,
-                                        style: theme.textTheme.titleMedium?.copyWith(
-                                          fontWeight: FontWeight.w700,
+                                        'Откуда',
+                                        style: theme.textTheme.labelSmall?.copyWith(
+                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        pickup.isNotEmpty ? pickup : '—',
+                                        style: theme.textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Куда',
+                                        style: theme.textTheme.labelSmall?.copyWith(
+                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        dropLine.isNotEmpty ? dropLine : '—',
+                                        style: theme.textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w600,
                                         ),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
@@ -166,20 +232,29 @@ class DriverHistoryTab extends ConsumerWidget {
                                         children: [
                                           Expanded(
                                             child: Text(
-                                              '№${_compactOrderId(id)}',
+                                              '${_orderDisplayNo(id)} · $durStr',
                                               style: theme.textTheme.bodySmall?.copyWith(
                                                 color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                                               ),
                                             ),
                                           ),
-                                          Text(
-                                            'Подробнее',
-                                            style: theme.textTheme.labelLarge?.copyWith(
-                                              color: theme.colorScheme.primary,
-                                              fontWeight: FontWeight.w600,
+                                          GestureDetector(
+                                            behavior: HitTestBehavior.opaque,
+                                            onTap: () => openDriverOrderComplaint(context, id),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  'Жалоба',
+                                                  style: theme.textTheme.labelLarge?.copyWith(
+                                                    color: primaryOrange,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                                Icon(Icons.chevron_right, size: 20, color: primaryOrange),
+                                              ],
                                             ),
                                           ),
-                                          Icon(Icons.chevron_right, size: 20, color: theme.colorScheme.primary),
                                         ],
                                       ),
                                     ],

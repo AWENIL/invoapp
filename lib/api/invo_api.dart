@@ -10,6 +10,13 @@ String _err(dynamic data, String fallback) {
   return s.isEmpty ? fallback : s;
 }
 
+/// Не подставлять JWT на шагах входа — старый токен не должен уходить вместе с verify-otp / phone-login.
+bool _skipAuthHeaderForPath(String path) {
+  return path.contains('verify-otp') ||
+      path.contains('phone-login') ||
+      path.contains('check-driver-phone');
+}
+
 String formatApiErrorBody(dynamic data) {
   if (data == null) return '';
   if (data is String) {
@@ -68,7 +75,9 @@ class InvoApi {
       InterceptorsWrapper(
         onRequest: (options, handler) async {
           final a = await _tokens.readAccess();
-          if (a != null && a.isNotEmpty) {
+          if (a != null &&
+              a.isNotEmpty &&
+              !_skipAuthHeaderForPath(options.path)) {
             options.headers['Authorization'] = 'Bearer $a';
           }
           return handler.next(options);
@@ -122,10 +131,16 @@ class InvoApi {
     }
   }
 
-  Future<void> requestOtp(String phone) async {
+  Future<void> requestOtp(String phone, {bool forDriver = false}) async {
     final p = phone.trim();
     try {
-      await _dio.post<Map<String, dynamic>>('auth/phone-login/', data: {'phone': p});
+      await _dio.post<Map<String, dynamic>>(
+        'auth/phone-login/',
+        data: {
+          'phone': p,
+          if (forDriver) 'for_driver': true,
+        },
+      );
     } on DioException catch (e) {
       throw Exception(_err(e.response?.data, 'Ошибка отправки кода'));
     }
@@ -157,14 +172,18 @@ class InvoApi {
     }
   }
 
-  Future<Map<String, dynamic>> verifyOtp(String phone, String code) async {
+  Future<Map<String, dynamic>> verifyOtp(String phone, String code, {bool forDriver = false}) async {
     final p = phone.trim();
     final c = code.replaceAll(RegExp(r'\D'), '');
     final Response<Map<String, dynamic>> r;
     try {
       r = await _dio.post<Map<String, dynamic>>(
         'auth/verify-otp/',
-        data: {'phone': p, 'code': c},
+        data: {
+          'phone': p,
+          'code': c,
+          if (forDriver) 'for_driver': true,
+        },
       );
     } on DioException catch (e) {
       throw Exception(_err(e.response?.data, 'Неверный код'));
@@ -371,6 +390,49 @@ class InvoApi {
       throw Exception(_err(r.data, 'Статистика'));
     }
     return r.data!;
+  }
+
+  Future<Map<String, dynamic>> getDriverOrderComplaint(String orderId) async {
+    try {
+      final r = await _dio.get<Map<String, dynamic>>('drivers/order/$orderId/complaint/');
+      if (r.statusCode != 200 || r.data == null) {
+        throw Exception(_err(r.data, 'Жалоба'));
+      }
+      return r.data!;
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Жалоба'));
+    }
+  }
+
+  Future<Map<String, dynamic>> submitDriverOrderComplaint(
+    String orderId, {
+    required String category,
+    required String description,
+    String? attachmentPath,
+  }) async {
+    try {
+      final map = <String, dynamic>{
+        'category': category,
+        'description': description,
+      };
+      if (attachmentPath != null && attachmentPath.isNotEmpty) {
+        map['attachment'] = await MultipartFile.fromFile(
+          attachmentPath,
+          filename: attachmentPath.replaceAll('\\', '/').split('/').last,
+        );
+      }
+      final form = FormData.fromMap(map);
+      final r = await _dio.post<Map<String, dynamic>>(
+        'drivers/order/$orderId/complaint/',
+        data: form,
+      );
+      if (r.statusCode != 201 || r.data == null) {
+        throw Exception(_err(r.data, 'Не удалось отправить жалобу'));
+      }
+      return r.data!;
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Не удалось отправить жалобу'));
+    }
   }
 
   /// Общий FAQ (тот же список, что у пассажира; доступен любому авторизованному пользователю).

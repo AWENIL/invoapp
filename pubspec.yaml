@@ -40,6 +40,7 @@ dependencies:
   webview_flutter: ^4.13.1
   web_socket_channel: ^3.0.2
   geolocator: ^14.0.2
+  file_picker: ^8.3.7
   invo_common:
     path: ../invo_common
 

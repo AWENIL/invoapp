@@ -3,8 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../order_list_sort.dart';
-import '../order_status_labels.dart';
 import '../providers/app_providers.dart';
 import '../theme/driver_auth_theme.dart';
 import 'driver_order_chat_screen.dart';
@@ -223,8 +221,8 @@ class OrdersTab extends ConsumerWidget {
                   ),
               ],
             ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }

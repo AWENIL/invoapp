@@ -2,11 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../order_status_labels.dart';
 import '../providers/app_providers.dart';
 import '../services/driver_location_sync.dart';
+import '../widgets/driver_order_complaint_sheet.dart';
 import '../widgets/order_route_map.dart';
 import 'driver_order_chat_screen.dart';
 
@@ -66,6 +67,26 @@ String? _passengerPhoneFromOrder(Map<String, dynamic> order) {
   return null;
 }
 
+String _orderDisplayNo(String id) {
+  final parts = id.split('-');
+  if (parts.length >= 5) {
+    final a = parts[1].length >= 2 ? parts[1].substring(0, 2) : parts[1];
+    final b = parts[4].length >= 2 ? parts[4].substring(parts[4].length - 2) : parts[4];
+    return '№${a.toUpperCase()}-${b.toUpperCase()}';
+  }
+  if (id.length <= 12) return '№$id';
+  return '№${id.substring(0, 6)}…${id.substring(id.length - 2)}';
+}
+
+String _shortPassengerLabel(String? full) {
+  if (full == null || full.isEmpty) return '—';
+  final parts = full.trim().split(RegExp(r'\s+'));
+  if (parts.length == 1) return parts[0];
+  final second = parts[1];
+  if (second.isEmpty) return parts[0];
+  return '${parts[0]} ${second[0].toUpperCase()}.';
+}
+
 class OrderDetailScreen extends ConsumerStatefulWidget {
   const OrderDetailScreen({
     super.key,
@@ -75,7 +96,7 @@ class OrderDetailScreen extends ConsumerStatefulWidget {
 
   final String orderId;
 
-  /// С вкладки «Поездка»: без кнопки «Назад», после завершения не вызывается pop.
+  /// С вкладки «Поездка»: без стрелки в AppBar; на экране завершения «Назад» ведёт на вкладку «Заказ».
   final bool embeddedInShell;
 
   @override
@@ -85,6 +106,8 @@ class OrderDetailScreen extends ConsumerStatefulWidget {
 class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   Timer? _pollTimer;
   Timer? _navRefreshTimer;
+  Timer? _waitTicker;
+  int? _waitDisplaySeconds;
   double? _navFromLat;
   double? _navFromLon;
   Map<String, dynamic>? _activeMeta;
@@ -101,7 +124,50 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   void dispose() {
     _stopPoll();
     _stopNavRefresh();
+    _stopWaitTicker();
     super.dispose();
+  }
+
+  void _onCompletedDismiss(BuildContext context) {
+    ref.invalidate(driverOrdersProvider);
+    ref.invalidate(driverHistoryOrdersProvider);
+    if (widget.embeddedInShell) {
+      ref.read(driverShellTabIndexProvider.notifier).state = 0;
+    } else if (context.mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  void _ensureWaitTicker() {
+    _waitTicker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_waitDisplaySeconds == null || _waitDisplaySeconds! <= 0) return;
+      setState(() => _waitDisplaySeconds = _waitDisplaySeconds! - 1);
+    });
+  }
+
+  void _stopWaitTicker() {
+    _waitTicker?.cancel();
+    _waitTicker = null;
+  }
+
+  void _syncWaitSecondsFromOrder(Map<String, dynamic> order) {
+    if ((order['status']?.toString() ?? '') != 'arrived_waiting') {
+      if (_waitDisplaySeconds != null) {
+        setState(() => _waitDisplaySeconds = null);
+      }
+      return;
+    }
+    final sec = order['waiting_free_remaining_seconds'];
+    if (sec is! num) return;
+    final serverVal = sec.round().clamp(0, 86400);
+    if (_waitDisplaySeconds == null) {
+      setState(() => _waitDisplaySeconds = serverVal);
+      return;
+    }
+    if ((serverVal - _waitDisplaySeconds!).abs() > 2) {
+      setState(() => _waitDisplaySeconds = serverVal);
+    }
   }
 
   Future<void> _loadNavOrigin() async {
@@ -271,19 +337,25 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     }
   }
 
-  String _formatWaitMmSs(Map<String, dynamic> order) {
-    final sec = order['waiting_free_remaining_seconds'];
-    if (sec is! num) return '00:00';
-    final s = sec.round().clamp(0, 86400);
+  String _formatWaitMmSs(Map<String, dynamic> order, {int? displayRemaining}) {
+    final sec = displayRemaining ??
+        ((order['waiting_free_remaining_seconds'] is num)
+            ? (order['waiting_free_remaining_seconds'] as num).round()
+            : null);
+    if (sec == null) return '00:00';
+    final s = sec.clamp(0, 86400);
     final m = s ~/ 60;
     final r = s % 60;
     return '${m.toString().padLeft(2, '0')}:${r.toString().padLeft(2, '0')}';
   }
 
-  double _waitProgress(Map<String, dynamic> order) {
-    final remaining = order['waiting_free_remaining_seconds'];
+  double _waitProgress(Map<String, dynamic> order, {int? displayRemaining}) {
+    final remaining = displayRemaining ??
+        ((order['waiting_free_remaining_seconds'] is num)
+            ? (order['waiting_free_remaining_seconds'] as num).round()
+            : null);
     final minutes = order['waiting_free_minutes'];
-    if (remaining is! num) return 0;
+    if (remaining == null) return 0;
     final totalSec = (minutes is num && minutes > 0) ? (minutes * 60).round() : 1200;
     if (totalSec <= 0) return 0;
     return (1 - remaining / totalSec).clamp(0.0, 1.0);
@@ -318,10 +390,21 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         final status = order['status']?.toString() ?? '';
         if (status == 'arrived_waiting') {
           _ensurePoll();
+          _ensureWaitTicker();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _syncWaitSecondsFromOrder(order);
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) => _loadNavOrigin());
         } else {
           _stopPoll();
+          _stopWaitTicker();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _syncWaitSecondsFromOrder(order);
+          });
         }
-        if (status == 'driver_en_route' || status == 'ride_ongoing') {
+        if (status == 'driver_en_route' || status == 'ride_ongoing' || status == 'arrived_waiting') {
           _ensureNavRefresh();
         } else {
           _stopNavRefresh();
@@ -351,27 +434,6 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 
   Widget _buildTripScaffold(BuildContext context, Map<String, dynamic> order, String status) {
-    if (status == 'completed') {
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Поездка'),
-          automaticallyImplyLeading: !widget.embeddedInShell,
-        ),
-        body: _TripCompletedBody(
-          order: order,
-          onReady: () {
-            ref.invalidate(driverOrdersProvider);
-            ref.invalidate(driverHistoryOrdersProvider);
-            if (!widget.embeddedInShell &&
-                context.mounted &&
-                Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            }
-          },
-        ),
-      );
-    }
-
     final pickup = order['pickup_title']?.toString() ?? '';
     final dropObj = order['dropoff_object_name']?.toString().trim();
     final dropTitle = order['dropoff_title']?.toString() ?? '';
@@ -380,12 +442,200 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     final plon = (order['pickup_lon'] as num?)?.toDouble();
     final dlat = (order['dropoff_lat'] as num?)?.toDouble();
     final dlon = (order['dropoff_lon'] as num?)?.toDouble();
-
     final mapH = MediaQuery.sizeOf(context).height * 0.40;
+
+    if (status == 'completed') {
+      final w = order['waiting_time_minutes'];
+      final d = order['distance_km'];
+      final waitStr = w is num ? '${w.round()} мин' : '—';
+      final distStr = d is num ? '${NumberFormat('#0.0', 'ru_RU').format(d)} км' : '—';
+      final pName = _shortPassengerLabel(_passengerNameFromOrder(order));
+      final hasCompanion = order['has_companion'] == true;
+      final orderNo = _orderDisplayNo(widget.orderId);
+
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SafeArea(
+              bottom: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 4, 8, 8),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Material(
+                        color: Colors.white,
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.antiAlias,
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_back),
+                          onPressed: () => _onCompletedDismiss(context),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    height: mapH,
+                    width: double.infinity,
+                    child: _buildCompletedRouteMap(
+                      plat: plat,
+                      plon: plon,
+                      dlat: dlat,
+                      dlon: dlon,
+                      mapH: mapH,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                  boxShadow: [
+                    BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(0, -4)),
+                  ],
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Детали поездки',
+                        style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Colors.grey.shade900),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '$orderNo · $waitStr',
+                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.grey.shade800),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _chipBg,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Text(
+                              'Завершено',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFC62828)),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      _completedLocationRow(icon: Icons.near_me, label: pickup),
+                      const SizedBox(height: 12),
+                      _completedLocationRow(icon: Icons.flag_outlined, label: dropLine.isNotEmpty ? dropLine : '—'),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _completedStatTile('Время', waitStr),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _completedStatTile('Расстояние', distStr),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 24,
+                              backgroundColor: Colors.grey.shade200,
+                              child: Icon(Icons.person_outline, color: Colors.grey.shade700),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    pName,
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Пассажир',
+                                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (hasCompanion)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: _chipBg,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  'Сопровождающий',
+                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.grey.shade800),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _primaryOrange,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          onPressed: () => openDriverOrderComplaint(context, widget.orderId),
+                          child: const Text('Подать жалобу', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () => _onCompletedDismiss(context),
+                          child: const Text('Готов к новому заказу', style: TextStyle(fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final waitMin = order['waiting_free_minutes'];
+    final appTitle = status == 'arrived_waiting' && waitMin is num
+        ? 'Ожидание ${waitMin.round()} минут'
+        : 'Поездка';
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Поездка'),
+        title: Text(appTitle),
         automaticallyImplyLeading: !widget.embeddedInShell,
       ),
       body: Column(
@@ -429,6 +679,61 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     );
   }
 
+  Widget _buildCompletedRouteMap({
+    required double? plat,
+    required double? plon,
+    required double? dlat,
+    required double? dlon,
+    required double mapH,
+  }) {
+    if (plat == null || plon == null || dlat == null || dlon == null) {
+      return Container(
+        color: const Color(0xFFE8E8E8),
+        alignment: Alignment.center,
+        child: const Icon(Icons.map_outlined, size: 48, color: Colors.grey),
+      );
+    }
+    return TripSegmentMap(
+      fromLat: plat,
+      fromLon: plon,
+      toLat: dlat,
+      toLon: dlon,
+      mapHeight: mapH,
+      showOpenInExternalMapsButton: false,
+    );
+  }
+
+  Widget _completedLocationRow({required IconData icon, required String label}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 22, color: Colors.black87),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+        ),
+      ],
+    );
+  }
+
+  Widget _completedStatTile(String title, String value) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+          const SizedBox(height: 6),
+          Text(value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMapArea({
     required String status,
     required double? plat,
@@ -446,20 +751,19 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     }
 
     if (status == 'arrived_waiting') {
-      return Container(
-        color: const Color(0xFFE8E8E8),
-        alignment: Alignment.center,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.place, size: 56, color: Colors.orange.shade700),
-            const SizedBox(height: 8),
-            Text(
-              'Ожидание пассажира',
-              style: TextStyle(fontSize: 14, color: Colors.grey.shade700, fontWeight: FontWeight.w500),
-            ),
-          ],
-        ),
+      var fLat = _navFromLat ?? plat;
+      var fLon = _navFromLon ?? plon;
+      if ((fLat - plat).abs() < 1e-5 && (fLon - plon).abs() < 1e-5) {
+        fLat = plat + 0.002;
+        fLon = plon + 0.002;
+      }
+      return TripSegmentMap(
+        fromLat: fLat,
+        fromLon: fLon,
+        toLat: plat,
+        toLon: plon,
+        mapHeight: mapH,
+        showOpenInExternalMapsButton: false,
       );
     }
 
@@ -704,7 +1008,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            _formatWaitMmSs(order),
+            _formatWaitMmSs(order, displayRemaining: _waitDisplaySeconds),
             style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w700, letterSpacing: 1),
           ),
           Text(
@@ -715,7 +1019,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
-              value: _waitProgress(order),
+              value: _waitProgress(order, displayRemaining: _waitDisplaySeconds),
               minHeight: 6,
               backgroundColor: Colors.grey.shade200,
               color: _primaryOrange,
@@ -951,178 +1255,6 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _TripCompletedBody extends StatefulWidget {
-  const _TripCompletedBody({required this.order, required this.onReady});
-
-  final Map<String, dynamic> order;
-  final VoidCallback onReady;
-
-  @override
-  State<_TripCompletedBody> createState() => _TripCompletedBodyState();
-}
-
-class _TripCompletedBodyState extends State<_TripCompletedBody> with SingleTickerProviderStateMixin {
-  late final AnimationController _uploadCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _uploadCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _uploadCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final w = widget.order['waiting_time_minutes'];
-    final d = widget.order['distance_km'];
-    final waitStr = w is num ? '${w.round()} мин' : '—';
-    final distStr = d is num ? '${d.toStringAsFixed(1)} км' : '—';
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          const SizedBox(height: 16),
-          Container(
-            width: 72,
-            height: 72,
-            decoration: const BoxDecoration(color: _primaryOrange, shape: BoxShape.circle),
-            child: const Icon(Icons.check, color: Colors.white, size: 40),
-          ),
-          const SizedBox(height: 20),
-          const Text(
-            'Поездка завершена',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Запись салона остановлена. Видео загружается в защищённое хранилище.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade700, height: 1.35),
-          ),
-          const SizedBox(height: 28),
-          Row(
-            children: [
-              Expanded(
-                child: _statCard('Время', waitStr),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _statCard('Расстояние', distStr),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: _chipBg,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Оценка пассажира', style: TextStyle(fontWeight: FontWeight.w500)),
-                Text(
-                  '— ★',
-                  style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey.shade800),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.videocam_outlined, size: 20, color: Colors.grey.shade700),
-                    const SizedBox(width: 8),
-                    const Text('Видеозапись поездки', style: TextStyle(fontWeight: FontWeight.w600)),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                AnimatedBuilder(
-                  animation: _uploadCtrl,
-                  builder: (context, _) {
-                    final v = 0.45 + _uploadCtrl.value * 0.25;
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: v,
-                            minHeight: 8,
-                            backgroundColor: Colors.grey.shade200,
-                            color: _primaryOrange,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text('Загрузка', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-                            Text('${(v * 100).round()}%', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: _primaryOrange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              onPressed: widget.onReady,
-              child: const Text('Готов к новому заказу', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statCard(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-          const SizedBox(height: 6),
-          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-        ],
       ),
     );
   }

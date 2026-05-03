@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/app_providers.dart';
 import 'driver_history_tab.dart';
 import 'driver_trip_tab.dart';
 import 'orders_tab.dart';
@@ -16,7 +17,6 @@ class DriverShell extends ConsumerStatefulWidget {
 }
 
 class _DriverShellState extends ConsumerState<DriverShell> {
-  int _index = 0;
   Timer? _activeOrderPoll;
 
   @override
@@ -34,24 +34,13 @@ class _DriverShellState extends ConsumerState<DriverShell> {
     super.dispose();
   }
 
-  String _statusRu(String code) {
-    const labels = {
-      'assigned': 'Назначен',
-      'driver_en_route': 'Еду к пассажиру',
-      'arrived_waiting': 'Ожидаю',
-      'ride_ongoing': 'В пути',
-      'completed': 'Завершён',
-      'cancelled': 'Отменён',
-    };
-    return labels[code] ?? code;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final active = ref.watch(driverActiveOrderProvider);
+    ref.watch(driverActiveOrderProvider);
+    final tabIndex = ref.watch(driverShellTabIndexProvider);
     return Scaffold(
       body: IndexedStack(
-        index: _index,
+        index: tabIndex,
         children: const [
           OrdersTab(),
           DriverTripTab(),
@@ -60,8 +49,8 @@ class _DriverShellState extends ConsumerState<DriverShell> {
         ],
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        selectedIndex: tabIndex,
+        onDestinationSelected: (i) => ref.read(driverShellTabIndexProvider.notifier).state = i,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),

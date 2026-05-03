@@ -4,10 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/app_providers.dart';
 import '../theme/driver_auth_theme.dart';
 
-final _personalStatsProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
-  return ref.watch(invoApiProvider).getStatistics();
-});
-
 String _phoneFromProfile(Map<String, dynamic> profile) {
   final u = profile['user'];
   if (u is Map) {
@@ -64,20 +60,18 @@ class DriverPersonalInfoScreen extends ConsumerWidget {
   }
 }
 
-class _PersonalInfoBody extends ConsumerWidget {
+class _PersonalInfoBody extends StatelessWidget {
   const _PersonalInfoBody({required this.profile});
 
   final Map<String, dynamic> profile;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final name = (profile['name'] ?? '') as String? ?? 'Водитель';
     final car = (profile['car_model'] ?? '') as String? ?? '';
     final plate = (profile['plate_number'] ?? '') as String? ?? '';
     final vehicleLine = [car, plate].where((e) => e.isNotEmpty).join(' · ');
-    final stats = ref.watch(_personalStatsProvider);
-    final isOnline = profile['is_online'] == true;
 
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
@@ -155,65 +149,6 @@ class _PersonalInfoBody extends ConsumerWidget {
             icon: Icons.workspace_premium_outlined,
             label: 'Сертификат',
             value: 'Уточните у диспетчера',
-          ),
-          const SizedBox(height: 20),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('На линии'),
-            subtitle: Text(
-              'Видимость для диспетчера',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-              ),
-            ),
-            value: isOnline,
-            onChanged: (v) async {
-              try {
-                await ref.read(invoApiProvider).patchOnlineStatus(v);
-                await ref.read(sessionProvider.notifier).refreshProfile();
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-                }
-              }
-            },
-          ),
-          const Divider(height: 32),
-          stats.when(
-            loading: () => const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
-            error: (e, _) => Text('Статистика: $e'),
-            data: (st) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Статистика',
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('Рейтинг: ${st['rating'] ?? "—"}'),
-                  Text('Заказов сегодня: ${st['today_completed_orders'] ?? "—"}'),
-                  Text('Всего завершено: ${st['total_completed_orders'] ?? "—"}'),
-                  Text('Принятие: ${st['acceptance_rate'] ?? "—"}'),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 28),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Редактирование профиля скоро будет доступно')),
-                );
-              },
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
-              child: const Text('Изменить'),
-            ),
           ),
         ],
       ),

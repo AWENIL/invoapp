@@ -27,9 +27,12 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
   late final AnimationController _blink;
 
   Timer? _cooldownTimer;
+  Timer? _autoVerifyDebounce;
   int _secondsLeft = _cooldownSec;
   bool _loading = false;
   bool _verifyInFlight = false;
+  /// После успешного verifyOtp повторный POST с тем же кодом даёт 400; блокируем до нового SMS/редактирования.
+  bool _otpConsumedOnServer = false;
   bool _resendLoading = false;
   bool _wrongCode = false;
   double _shakeOffset = 0;
@@ -98,9 +101,16 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
       _focusNodes[index + 1].requestFocus();
     }
     setState(() {});
-    if (_complete && !_loading && !_verifyInFlight) {
-      Future.microtask(() {
-        if (mounted && _complete && !_loading && !_verifyInFlight) _verify();
+    _autoVerifyDebounce?.cancel();
+    if (_complete && !_loading && !_verifyInFlight && !_otpConsumedOnServer) {
+      _autoVerifyDebounce = Timer(const Duration(milliseconds: 80), () {
+        if (mounted &&
+            _complete &&
+            !_loading &&
+            !_verifyInFlight &&
+            !_otpConsumedOnServer) {
+          _verify();
+        }
       });
     }
   }
@@ -129,9 +139,35 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
     }
   }
 
+  Future<void> _handleAfterVerifyFailure(Object e) async {
+    _otpConsumedOnServer = false;
+    await ref.read(tokenStorageProvider).clear();
+    if (!mounted) return;
+    final msg = e is Exception ? e.toString().replaceFirst('Exception: ', '') : '$e';
+    for (final c in _controllers) {
+      c.clear();
+    }
+    _focusNodes[0].requestFocus();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$msg\n'
+          'Код на сервере уже засчитан. Нажмите «Отправить код повторно» и введите новый SMS.',
+        ),
+      ),
+    );
+  }
+
   String _mapVerifyError(Object e) {
     final s = e is Exception ? e.toString().replaceFirst('Exception: ', '') : '$e';
     final lower = s.toLowerCase();
+    // Не смешивать с «неверный код»: ответы сервера про отсутствие профиля водителя.
+    if (lower.contains('уже был использован') || lower.contains('отправить код повторно')) {
+      return s;
+    }
+    if (lower.contains('водител') || lower.contains('диспетчер')) {
+      return s;
+    }
     if (lower.contains('неверный') ||
         lower.contains('истек') ||
         lower.contains('код должен') ||
@@ -143,6 +179,26 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
 
   Future<void> _verify() async {
     if (!_complete || _loading || _verifyInFlight) return;
+
+    /// Код уже принят (авто-проверка); повторный POST даст 400 — только догружаем профиль.
+    if (_otpConsumedOnServer) {
+      _verifyInFlight = true;
+      setState(() {
+        _loading = true;
+        _wrongCode = false;
+      });
+      FocusScope.of(context).unfocus();
+      try {
+        await ref.read(sessionProvider.notifier).afterVerify(const <String, dynamic>{});
+      } catch (e) {
+        await _handleAfterVerifyFailure(e);
+      } finally {
+        _verifyInFlight = false;
+        if (mounted) setState(() => _loading = false);
+      }
+      return;
+    }
+
     _verifyInFlight = true;
     setState(() {
       _loading = true;
@@ -150,30 +206,26 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
     });
     FocusScope.of(context).unfocus();
     try {
-      final data = await ref.read(invoApiProvider).verifyOtp(widget.phone, _otp);
+      await ref.read(invoApiProvider).verifyOtp(widget.phone, _otp, forDriver: true);
+      if (!mounted) return;
+      _otpConsumedOnServer = true;
       try {
-        await ref.read(sessionProvider.notifier).afterVerify(data);
+        await ref.read(sessionProvider.notifier).afterVerify(const <String, dynamic>{});
       } catch (e) {
-        await ref.read(tokenStorageProvider).clear();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '${e is Exception ? e.toString().replaceFirst('Exception: ', '') : e}\n'
-                'Код на сервере уже израсходован. Нажмите «Отправить код повторно».',
-              ),
-            ),
-          );
-        }
+        await _handleAfterVerifyFailure(e);
         return;
       }
     } catch (e) {
       final raw = e is Exception ? e.toString() : e.toString();
       final lower = raw.toLowerCase();
-      final badOtp = lower.contains('неверный') ||
-          lower.contains('истек') ||
-          lower.contains('invalid') ||
-          lower.contains('код должен');
+      final driverAccountMsg = lower.contains('водител') ||
+          lower.contains('диспетчер') ||
+          lower.contains('уже был использован');
+      final badOtp = !driverAccountMsg &&
+          (lower.contains('неверный') ||
+              lower.contains('истек') ||
+              lower.contains('invalid') ||
+              lower.contains('код должен'));
       final phoneFormat = lower.contains('телефон') || lower.contains('phone');
       if (phoneFormat && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -200,12 +252,13 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
   /// После ошибки verifyOtp токен мог не сохраниться; при успехе without exception we're good.
   Future<void> _resend() async {
     if (_secondsLeft > 0 || _resendLoading) return;
+    _otpConsumedOnServer = false;
     setState(() {
       _resendLoading = true;
       _wrongCode = false;
     });
     try {
-      await ref.read(invoApiProvider).requestOtp(widget.phone);
+      await ref.read(invoApiProvider).requestOtp(widget.phone, forDriver: true);
       if (!mounted) return;
       for (final c in _controllers) {
         c.clear();
@@ -230,6 +283,7 @@ class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
   @override
   void dispose() {
     _cooldownTimer?.cancel();
+    _autoVerifyDebounce?.cancel();
     for (final c in _controllers) {
       c.dispose();
     }

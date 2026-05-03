@@ -4,12 +4,20 @@ import '../api/invo_api.dart';
 import '../services/driver_location_sync.dart';
 import '../services/token_storage.dart';
 
+/// Индекс вкладки нижней навигации водителя: 0 «Заказ», 1 «Поездка», 2 «История», 3 «Профиль».
+final driverShellTabIndexProvider = StateProvider<int>((ref) => 0);
+
 /// Статусы «активного» заказа (совпадают с `get_active_order` на бэкенде).
 const String driverActiveOrderStatuses =
     'assigned,driver_en_route,arrived_waiting,ride_ongoing';
 
-/// Завершённые и прочие «архивные» статусы для вкладки «История».
-const String driverHistoryOrderStatuses = 'completed,cancelled,no_show,incident';
+/// Статусы активной поездки — всё остальное из ответа API показываем в «Истории».
+const Set<String> driverActiveOrderStatusSet = {
+  'assigned',
+  'driver_en_route',
+  'arrived_waiting',
+  'ride_ongoing',
+};
 
 int _driverActiveStatusRank(String code) {
   switch (code) {
@@ -82,16 +90,21 @@ final driverOrdersProvider =
 
 final driverHistoryOrdersProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final raw = await ref
-      .watch(invoApiProvider)
-      .getOrders(status: driverHistoryOrderStatuses, limit: 100);
+  // Без фильтра status на сервере: иначе теряются заказы в других финальных статусах
+  // (rejected, стадии до/после реассайна и т.д.). Исключаем только «текущую поездку».
+  final raw = await ref.watch(invoApiProvider).getOrders(limit: 500);
   final results = raw['results'];
-  if (results is List) {
-    final list =
-        results.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    return sortDriverHistoryOrders(list);
+  if (results is! List) return [];
+  final list = <Map<String, dynamic>>[];
+  for (final e in results) {
+    if (e is! Map) continue;
+    final o = Map<String, dynamic>.from(e);
+    final st = o['status']?.toString() ?? '';
+    if (!driverActiveOrderStatusSet.contains(st)) {
+      list.add(o);
+    }
   }
-  return [];
+  return sortDriverHistoryOrders(list);
 });
 
 final driverOffersProvider =
@@ -210,20 +223,22 @@ class SessionNotifier extends AsyncNotifier<DriverSession?> {
   }
 
   Future<void> afterVerify(Map<String, dynamic> verifyResponse) async {
-    final role = verifyResponse['role'] as String?;
-    final hasProfile = verifyResponse['has_profile'] == true;
-    if (role != 'driver') {
-      await ref.read(tokenStorageProvider).clear();
-      throw Exception('Войдите как водитель (текущая роль: ${role ?? "—"})');
-    }
-    if (!hasProfile) {
-      await ref.read(tokenStorageProvider).clear();
-      throw Exception('Профиль водителя не найден. Обратитесь к диспетчеру.');
-    }
     final api = ref.read(invoApiProvider);
-    final p = await api.getDriverProfile();
-    state = AsyncData(DriverSession(p));
-    _schedulePushLocationToBackend();
+    Object? lastError;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final p = await api.getDriverProfile();
+        state = AsyncData(DriverSession(p));
+        _schedulePushLocationToBackend();
+        return;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    await ref.read(tokenStorageProvider).clear();
+    throw lastError is Exception
+        ? lastError as Exception
+        : Exception(lastError?.toString() ?? 'Профиль недоступен');
   }
 
   Future<void> logout() async {

@@ -57,12 +57,12 @@ class _DriverPhoneLoginScreenState extends ConsumerState<DriverPhoneLoginScreen>
     });
     try {
       final api = ref.read(invoApiProvider);
-      final canonical = await api.checkDriverPhone(_phone.text.trim());
-      await api.requestOtp(canonical);
+      final rawPhone = _phone.text.trim();
+      await api.requestOtp(rawPhone, forDriver: true);
       if (!mounted) return;
       await Navigator.of(context).push<void>(
         CupertinoPageRoute<void>(
-          builder: (context) => DriverOtpScreen(phone: canonical),
+          builder: (context) => DriverOtpScreen(phone: rawPhone),
         ),
       );
     } catch (e) {
@@ -109,7 +109,8 @@ class _DriverPhoneLoginScreenState extends ConsumerState<DriverPhoneLoginScreen>
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'Мы отправим SMS с кодом подтверждения для входа в приложение.',
+                        'Вход только для водителей, заведённых диспетчером. '
+                        'Тот же номер в приложении пассажира работает как пассажир — это другой тип аккаунта.',
                         style: TextStyle(
                           fontSize: 15,
                           height: 1.35,

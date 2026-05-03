@@ -67,33 +67,9 @@ class _TripSegmentMapState extends State<TripSegmentMap> {
     final u = Uri.parse(
       yandexRouteUrl(widget.fromLat, widget.fromLon, widget.toLat, widget.toLon),
     );
-  }
-
-  List<LatLng> _pointsForCamera(
-    List<LatLng> orderPts,
-    List<LatLng>? toPickup,
-    List<LatLng>? toDropoff,
-    bool pickupLeg,
-    bool dropoffLeg,
-  ) {
-    if (dropoffLeg) {
-      if (toDropoff != null && toDropoff.length >= 2) {
-        return List<LatLng>.from(toDropoff);
-      }
-      return <LatLng>[orderPts.last];
+    if (await canLaunchUrl(u)) {
+      await launchUrl(u, mode: LaunchMode.externalApplication);
     }
-    if (pickupLeg) {
-      if (toPickup != null && toPickup.length >= 2) {
-        return List<LatLng>.from(toPickup);
-      }
-      return <LatLng>[orderPts.first];
-    }
-    final out = <LatLng>[];
-    if (toPickup != null && toPickup.length >= 2) {
-      out.addAll(toPickup);
-    }
-    out.addAll(orderPts);
-    return out;
   }
 
   @override
@@ -132,7 +108,7 @@ class _TripSegmentMapState extends State<TripSegmentMap> {
         children: [
           mapBlock,
           TextButton.icon(
-            onPressed: _openYandexExternally,
+            onPressed: _openYandexApp,
             icon: const Icon(Icons.map_outlined),
             label: const Text('Открыть в приложении карт'),
           ),
