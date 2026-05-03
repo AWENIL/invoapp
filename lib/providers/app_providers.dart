@@ -1,45 +1,95 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/invo_api.dart';
+import '../services/driver_location_sync.dart';
 import '../services/token_storage.dart';
 
-/// Фильтр списка заказов на вкладке «Заказы».
-enum DriverOrdersListFilter {
-  all,
-  active,
-  completed,
-  cancelled,
-}
+/// Статусы «активного» заказа (совпадают с `get_active_order` на бэкенде).
+const String driverActiveOrderStatuses =
+    'assigned,driver_en_route,arrived_waiting,ride_ongoing';
 
-extension DriverOrdersListFilterApi on DriverOrdersListFilter {
-  /// Параметр `status` для `GET drivers/orders/`; `null` — без фильтра по статусу.
-  String? get apiStatusQuery {
-    switch (this) {
-      case DriverOrdersListFilter.all:
-        return null;
-      case DriverOrdersListFilter.active:
-        return 'assigned,driver_en_route,arrived_waiting,ride_ongoing';
-      case DriverOrdersListFilter.completed:
-        return 'completed';
-      case DriverOrdersListFilter.cancelled:
-        return 'cancelled';
-    }
+/// Завершённые и прочие «архивные» статусы для вкладки «История».
+const String driverHistoryOrderStatuses = 'completed,cancelled,no_show,incident';
+
+int _driverActiveStatusRank(String code) {
+  switch (code) {
+    case 'ride_ongoing':
+      return 0;
+    case 'arrived_waiting':
+      return 1;
+    case 'driver_en_route':
+      return 2;
+    case 'assigned':
+      return 3;
+    default:
+      return 99;
   }
 }
 
-final driverOrdersListFilterProvider =
-    StateProvider<DriverOrdersListFilter>((ref) => DriverOrdersListFilter.all);
+DateTime? _orderDateHint(Map<String, dynamic> o) {
+  final raw = o['desired_pickup_time'] ?? o['created_at'];
+  return DateTime.tryParse(raw?.toString() ?? '');
+}
+
+/// Один порядок для главного списка и вкладки «Поездка» (первый — текущий к исполнению).
+List<Map<String, dynamic>> sortDriverActiveOrders(List<Map<String, dynamic>> orders) {
+  final copy = orders.map((e) => Map<String, dynamic>.from(e)).toList();
+  copy.sort((a, b) {
+    final sa = a['status']?.toString() ?? '';
+    final sb = b['status']?.toString() ?? '';
+    final ra = _driverActiveStatusRank(sa);
+    final rb = _driverActiveStatusRank(sb);
+    if (ra != rb) return ra.compareTo(rb);
+    final ta = _orderDateHint(a);
+    final tb = _orderDateHint(b);
+    if (ta != null && tb != null) return ta.compareTo(tb);
+    return (a['id']?.toString() ?? '').compareTo(b['id']?.toString() ?? '');
+  });
+  return copy;
+}
+
+DateTime? _historySortTime(Map<String, dynamic> o) {
+  final c = o['completed_at'];
+  final d = DateTime.tryParse(c?.toString() ?? '');
+  if (d != null) return d;
+  return _orderDateHint(o);
+}
+
+List<Map<String, dynamic>> sortDriverHistoryOrders(List<Map<String, dynamic>> orders) {
+  final copy = orders.map((e) => Map<String, dynamic>.from(e)).toList();
+  copy.sort((a, b) {
+    final ta = _historySortTime(a);
+    final tb = _historySortTime(b);
+    if (ta != null && tb != null) return tb.compareTo(ta);
+    return (b['id']?.toString() ?? '').compareTo(a['id']?.toString() ?? '');
+  });
+  return copy;
+}
 
 final driverOrdersProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final filter = ref.watch(driverOrdersListFilterProvider);
-  final raw = await ref.watch(invoApiProvider).getOrders(
-        status: filter.apiStatusQuery,
-        limit: 50,
-      );
+  final raw = await ref
+      .watch(invoApiProvider)
+      .getOrders(status: driverActiveOrderStatuses);
   final results = raw['results'];
   if (results is List) {
-    return results.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final list =
+        results.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    return sortDriverActiveOrders(list);
+  }
+  return [];
+});
+
+final driverHistoryOrdersProvider =
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  final raw = await ref
+      .watch(invoApiProvider)
+      .getOrders(status: driverHistoryOrderStatuses, limit: 100);
+  final results = raw['results'];
+  if (results is List) {
+    final list =
+        results.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    return sortDriverHistoryOrders(list);
   }
   return [];
 });
@@ -126,6 +176,16 @@ final sessionProvider =
     AsyncNotifierProvider<SessionNotifier, DriverSession?>(() => SessionNotifier());
 
 class SessionNotifier extends AsyncNotifier<DriverSession?> {
+  void _schedulePushLocationToBackend() {
+    Future.microtask(() async {
+      try {
+        final pos = await DriverLocationSync.getCurrentPositionOrNull();
+        if (pos == null) return;
+        await ref.read(invoApiProvider).patchLocation(pos.latitude, pos.longitude);
+      } catch (_) {}
+    });
+  }
+
   @override
   Future<DriverSession?> build() async {
     final api = ref.read(invoApiProvider);
@@ -134,7 +194,9 @@ class SessionNotifier extends AsyncNotifier<DriverSession?> {
     if (access == null || access.isEmpty) return null;
     try {
       final p = await api.getDriverProfile();
-      return DriverSession(p);
+      final session = DriverSession(p);
+      _schedulePushLocationToBackend();
+      return session;
     } catch (_) {
       await storage.clear();
       return null;
@@ -161,6 +223,7 @@ class SessionNotifier extends AsyncNotifier<DriverSession?> {
     final api = ref.read(invoApiProvider);
     final p = await api.getDriverProfile();
     state = AsyncData(DriverSession(p));
+    _schedulePushLocationToBackend();
   }
 
   Future<void> logout() async {

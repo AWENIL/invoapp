@@ -6,40 +6,29 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../config/env.dart';
 import '../providers/app_providers.dart';
-import '../services/driver_location_sync.dart';
-import 'edit_driver_profile_screen.dart';
+import '../providers/driver_profile_extras_providers.dart';
+import '../theme/driver_auth_theme.dart';
+import 'driver_notifications_screen.dart';
+import 'driver_personal_info_screen.dart';
+import 'driver_support_screen.dart';
 
-String _driverStatusLabelRu(String? code) {
-  switch (code) {
-    case 'offline':
-      return 'Офлайн';
-    case 'online_idle':
-      return 'На линии, свободен';
-    case 'offered':
-      return 'Получено предложение';
-    case 'enroute_to_pickup':
-      return 'Едет к подаче';
-    case 'on_trip':
-      return 'В поездке';
-    case 'paused':
-      return 'Перерыв';
-    default:
-      return code ?? '—';
+String _regionSubtitle(Map<String, dynamic> profile) {
+  final r = profile['region'];
+  if (r is Map) {
+    final t = r['title']?.toString().trim();
+    if (t != null && t.isNotEmpty) return '$t, Казахстан';
   }
+  return 'Казахстан';
 }
 
-String? _formatFractionAsPercent(dynamic v) {
-  if (v == null) return null;
-  if (v is num) return '${(v * 100).round()}%';
-  return null;
-}
-
-String _ratingLine(DriverSession s, Map<String, dynamic>? st) {
-  final pr = s.ratingFromProfile;
-  if (pr != null) return pr.toStringAsFixed(1);
-  final r = st?['rating'];
-  if (r is num) return r.toStringAsFixed(1);
-  return '—';
+String _initials(String fullName) {
+  final parts = fullName.trim().split(RegExp(r'\s+'));
+  if (parts.isEmpty) return '?';
+  if (parts.length == 1) {
+    final s = parts.single;
+    return s.length >= 2 ? s.substring(0, 2).toUpperCase() : s.toUpperCase();
+  }
+  return ('${parts.first[0]}${parts.last[0]}').toUpperCase();
 }
 
 class ProfileTab extends ConsumerWidget {
@@ -47,186 +36,214 @@ class ProfileTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider);
-    final stats = ref.watch(driverStatisticsProvider);
-    final locationSync = ref.watch(driverLocationSyncProvider);
     final theme = Theme.of(context);
+    final session = ref.watch(sessionProvider);
+    final darkMode = ref.watch(driverThemeModeProvider) == ThemeMode.dark;
+    final hubBg = theme.brightness == Brightness.light
+        ? const Color(0xFFF2F2F7)
+        : theme.scaffoldBackgroundColor;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Профиль')),
+      backgroundColor: hubBg,
       body: session.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('$e')),
         data: (s) {
           if (s == null) return const SizedBox.shrink();
-          return RefreshIndicator(
-            onRefresh: () async {
-              await ref.read(sessionProvider.notifier).refreshProfile();
-              ref.invalidate(driverStatisticsProvider);
-            },
+          final name = s.name;
+          final profile = s.profile;
+
+          return SafeArea(
             child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
               children: [
-                Text(s.name, style: theme.textTheme.headlineSmall),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  title: const Text('На линии'),
-                  value: s.isOnline,
-                  onChanged: (v) async {
-                    try {
-                      await ref.read(invoApiProvider).patchOnlineStatus(v);
-                      await ref.read(sessionProvider.notifier).refreshProfile();
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-                      }
-                    }
-                  },
+                Text(
+                  'Профиль',
+                  style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
-                if (s.isOnline && !locationSync)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      'Включите доступ к геолокации в настройках устройства — иначе диспетчер не увидит ваше положение.',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.tertiary,
+                const SizedBox(height: 20),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        color: DriverAuthColors.primary.withValues(alpha: 0.15),
+                        border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.15)),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        _initials(name),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: DriverAuthColors.primary,
+                        ),
                       ),
                     ),
-                  ),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Мои данные', style: theme.textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        _ProfileInfoRow(label: 'Телефон', value: s.phone ?? '—'),
-                        _ProfileInfoRow(label: 'Регион', value: s.regionTitle ?? '—'),
-                        _ProfileInfoRow(label: 'Автомобиль', value: s.carModel),
-                        _ProfileInfoRow(label: 'Госномер', value: s.plateNumber),
-                        _ProfileInfoRow(
-                          label: 'Вместимость',
-                          value: s.capacity != null ? '${s.capacity} мест' : '—',
-                        ),
-                        if (s.lastLocationUpdate != null)
-                          _ProfileInfoRow(
-                            label: 'Координаты переданы',
-                            value: DateFormat('dd.MM.yyyy HH:mm').format(s.lastLocationUpdate!),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                           ),
-                      ],
+                          const SizedBox(height: 4),
+                          Text(
+                            _regionSubtitle(profile),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                ListTile(
-                  leading: const Icon(Icons.edit_outlined),
-                  title: const Text('Редактировать данные'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    await Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) => EditDriverProfileScreen(
-                          initialProfile: Map<String, dynamic>.from(s.profile),
-                        ),
-                      ),
-                    );
-                    if (context.mounted) {
-                      await ref.read(sessionProvider.notifier).refreshProfile();
-                      ref.invalidate(driverStatisticsProvider);
-                    }
-                  },
-                ),
-                const Divider(height: 32),
-                stats.when(
-                  loading: () => const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 16),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                  error: (e, _) => Text('Статистика: $e'),
-                  data: (st) {
-                    final statusCode = s.statusFromProfile ?? st['status']?.toString();
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Статистика', style: theme.textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        _ProfileInfoRow(
-                          label: 'Рейтинг',
-                          value: _ratingLine(s, st),
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Статус',
-                          value: _driverStatusLabelRu(statusCode),
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Заказов сегодня',
-                          value: '${st['today_completed_orders'] ?? "—"}',
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Всего завершено',
-                          value: '${st['total_completed_orders'] ?? "—"}',
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Принятие предложений',
-                          value: _formatFractionAsPercent(st['acceptance_rate']) ?? '—',
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Отмены после принятия',
-                          value: _formatFractionAsPercent(st['cancel_rate']) ?? '—',
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Предложений за час',
-                          value: '${st['offers_last_60min'] ?? "—"}',
-                        ),
-                        _ProfileInfoRow(
-                          label: 'Заказов за час',
-                          value: '${st['orders_last_60min'] ?? "—"}',
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                if (dispatchPhoneTelUri.isNotEmpty) ...[
-                  const SizedBox(height: 16),
-                  ListTile(
-                    leading: const Icon(Icons.phone_in_talk_outlined),
-                    title: const Text('Связь с диспетчером'),
-                    trailing: const Icon(Icons.open_in_new, size: 18),
-                    onTap: () async {
-                      final uri = Uri.parse(dispatchPhoneTelUri);
-                      if (await canLaunchUrl(uri)) {
-                        await launchUrl(uri);
-                      }
-                    },
-                  ),
-                ],
-                const SizedBox(height: 16),
-                FutureBuilder<PackageInfo>(
-                  future: PackageInfo.fromPlatform(),
-                  builder: (context, snap) {
-                    if (!snap.hasData) return const SizedBox.shrink();
-                    final p = snap.data!;
-                    return Text(
-                      'Версия ${p.version} (${p.buildNumber})',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    );
-                  },
+                  ],
                 ),
                 const SizedBox(height: 24),
-                FilledButton.tonal(
-                  onPressed: () async {
+                _hubTile(
+                  context,
+                  icon: Icons.person_outline_rounded,
+                  title: 'Персональная информация',
+                  onTap: () {
+                    Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(builder: (_) => const DriverPersonalInfoScreen()),
+                    );
+                  },
+                ),
+                const SizedBox(height: 10),
+                _hubTile(
+                  context,
+                  icon: Icons.support_agent_rounded,
+                  title: 'Служба поддержки',
+                  onTap: () {
+                    Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(builder: (_) => const DriverSupportScreen()),
+                    );
+                  },
+                ),
+                const SizedBox(height: 10),
+                _hubTile(
+                  context,
+                  icon: Icons.notifications_none_rounded,
+                  title: 'Уведомления',
+                  onTap: () {
+                    Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(builder: (_) => const DriverNotificationsScreen()),
+                    );
+                  },
+                ),
+                const SizedBox(height: 10),
+                Material(
+                  color: theme.cardTheme.color ?? theme.colorScheme.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: theme.colorScheme.outline.withValues(alpha: 0.22),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 8),
+                        Icon(
+                          Icons.dark_mode_outlined,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.75),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text(
+                            'Тёмная тема',
+                            style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Switch.adaptive(
+                          value: darkMode,
+                          activeThumbColor: Colors.white,
+                          activeTrackColor: DriverAuthColors.primary,
+                          onChanged: (v) {
+                            ref.read(driverThemeModeProvider.notifier).state =
+                                v ? ThemeMode.dark : ThemeMode.light;
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 36),
+                InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () async {
                     await ref.read(sessionProvider.notifier).logout();
                   },
-                  child: const Text('Выйти'),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Row(
+                      children: [
+                        Icon(Icons.logout_rounded, color: DriverAuthColors.error, size: 22),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Выход',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: DriverAuthColors.error,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _hubTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+    Widget? trailing,
+  }) {
+    final theme = Theme.of(context);
+    final surface = theme.cardTheme.color ?? theme.colorScheme.surface;
+    final border = theme.colorScheme.outline.withValues(alpha: 0.22);
+
+    return Material(
+      color: surface,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: border),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: theme.colorScheme.onSurface.withValues(alpha: 0.75)),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              trailing ??
+                  Icon(Icons.chevron_right_rounded, color: theme.colorScheme.onSurfaceVariant),
+            ],
+          ),
+        ),
       ),
     );
   }

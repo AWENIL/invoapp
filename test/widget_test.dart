@@ -21,6 +21,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('Invotaxi'), findsWidgets);
+    expect(find.textContaining('номеру телефона'), findsOneWidget);
   });
 }

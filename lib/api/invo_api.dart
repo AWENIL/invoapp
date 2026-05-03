@@ -12,6 +12,18 @@ String _err(dynamic data, String fallback) {
 
 String formatApiErrorBody(dynamic data) {
   if (data == null) return '';
+  if (data is String) {
+    final t = data.trim();
+    if (t.isEmpty) return '';
+    final lower = t.toLowerCase();
+    if (lower.startsWith('<!doctype') ||
+        lower.startsWith('<html') ||
+        lower.contains('<title>page not found')) {
+      return '';
+    }
+    if (t.length > 400) return '';
+    return t;
+  }
   if (data is Map) {
     final e = data['error'] ?? data['detail'];
     if (e is String) return e;
@@ -19,6 +31,21 @@ String formatApiErrorBody(dynamic data) {
     if (data['non_field_errors'] is List) {
       return (data['non_field_errors'] as List).map((x) => x.toString()).join('; ');
     }
+    final parts = <String>[];
+    for (final entry in data.entries) {
+      final k = entry.key.toString();
+      if (k == 'error' || k == 'detail') continue;
+      final v = entry.value;
+      if (v is List) {
+        for (final x in v) {
+          final s = x?.toString().trim() ?? '';
+          if (s.isNotEmpty) parts.add(s);
+        }
+      } else if (v is String && v.trim().isNotEmpty) {
+        parts.add(v.trim());
+      }
+    }
+    if (parts.isNotEmpty) return parts.join(' ');
     try {
       return jsonEncode(data);
     } catch (_) {
@@ -52,7 +79,8 @@ class InvoApi {
           if (code == 401 &&
               !path.contains('refresh-token') &&
               !path.contains('verify-otp') &&
-              !path.contains('phone-login')) {
+              !path.contains('phone-login') &&
+              !path.contains('check-driver-phone')) {
             final ok = await _tryRefresh();
             if (ok) {
               final a = await _tokens.readAccess();
@@ -95,19 +123,48 @@ class InvoApi {
   }
 
   Future<void> requestOtp(String phone) async {
+    final p = phone.trim();
     try {
-      await _dio.post<Map<String, dynamic>>('auth/phone-login/', data: {'phone': phone});
+      await _dio.post<Map<String, dynamic>>('auth/phone-login/', data: {'phone': p});
     } on DioException catch (e) {
       throw Exception(_err(e.response?.data, 'Ошибка отправки кода'));
     }
   }
 
+  /// Проверяет, что номер принадлежит водителю; возвращает телефон в формате из БД.
+  Future<String> checkDriverPhone(String phone) async {
+    final p = phone.trim();
+    try {
+      final r = await _dio.post<Map<String, dynamic>>(
+        'auth/check-driver-phone/',
+        data: {'phone': p},
+      );
+      final canonical = r.data?['phone'] as String?;
+      if (canonical == null || canonical.isEmpty) throw Exception('Пустой ответ');
+      return canonical;
+    } on DioException catch (e) {
+      final code = e.response?.statusCode;
+      if (code == 404) {
+        final parsed = _err(e.response?.data, '');
+        if (parsed.isNotEmpty) {
+          throw Exception(parsed);
+        }
+        throw Exception(
+          'Проверка номера на сервере недоступна. Обновите backend до версии с check-driver-phone и перезапустите его.',
+        );
+      }
+      throw Exception(_err(e.response?.data, 'Водитель с таким номером не найден'));
+    }
+  }
+
   Future<Map<String, dynamic>> verifyOtp(String phone, String code) async {
+    final p = phone.trim();
+    final c = code.replaceAll(RegExp(r'\D'), '');
     final Response<Map<String, dynamic>> r;
     try {
       r = await _dio.post<Map<String, dynamic>>(
         'auth/verify-otp/',
-        data: {'phone': phone, 'code': code},
+        data: {'phone': p, 'code': c},
       );
     } on DioException catch (e) {
       throw Exception(_err(e.response?.data, 'Неверный код'));
@@ -156,22 +213,12 @@ class InvoApi {
     await _dio.patch('drivers/location/', data: {'lat': lat, 'lon': lon});
   }
 
-  /// Ответ совпадает с телом заказа и флагом [has_active_order], либо только
-  /// `{ "has_active_order": false, "order": null }` если поездки нет.
-  Future<Map<String, dynamic>> getActiveOrder() async {
-    final r = await _dio.get<Map<String, dynamic>>('drivers/active-order/');
-    if (r.statusCode != 200 || r.data == null) {
-      throw Exception(_err(r.data, 'Активный заказ'));
-    }
-    return r.data!;
-  }
-
-  Future<Map<String, dynamic>> getOrders({String? status, int? limit}) async {
+  Future<Map<String, dynamic>> getOrders({String? status, int limit = 50}) async {
     final r = await _dio.get<Map<String, dynamic>>(
       'drivers/orders/',
       queryParameters: {
         if (status != null && status.isNotEmpty) 'status': status,
-        if (limit != null) 'limit': limit,
+        'limit': limit,
       },
     );
     if (r.statusCode != 200 || r.data == null) {
@@ -210,6 +257,44 @@ class InvoApi {
       throw Exception(_err(r.data, 'Заказ'));
     }
     return r.data!;
+  }
+
+  /// Активный заказ водителя (может включать route_to_pickup / route для ETA).
+  Future<Map<String, dynamic>> getActiveOrder() async {
+    final r = await _dio.get<Map<String, dynamic>>('drivers/active-order/');
+    if (r.statusCode != 200 || r.data == null) {
+      throw Exception(_err(r.data, 'Активный заказ'));
+    }
+    return r.data!;
+  }
+
+  Future<List<Map<String, dynamic>>> getDriverOrderMessages(String orderId, {int limit = 100}) async {
+    try {
+      final r = await _dio.get<Map<String, dynamic>>(
+        'drivers/order/$orderId/messages/',
+        queryParameters: {'limit': limit},
+      );
+      final raw = r.data?['results'];
+      if (raw is! List) return [];
+      return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Сообщения чата'));
+    }
+  }
+
+  Future<Map<String, dynamic>> postDriverOrderMessage(String orderId, String text) async {
+    try {
+      final r = await _dio.post<Map<String, dynamic>>(
+        'drivers/order/$orderId/messages/',
+        data: {'text': text},
+      );
+      if (r.statusCode != 201 || r.data == null) {
+        throw Exception(_err(r.data, 'Отправка сообщения'));
+      }
+      return Map<String, dynamic>.from(r.data!);
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Отправка сообщения'));
+    }
   }
 
   Future<Map<String, dynamic>> getOrderRoute(String orderId) async {
@@ -286,6 +371,23 @@ class InvoApi {
       throw Exception(_err(r.data, 'Статистика'));
     }
     return r.data!;
+  }
+
+  /// Общий FAQ (тот же список, что у пассажира; доступен любому авторизованному пользователю).
+  Future<List<Map<String, dynamic>>> getFaq() async {
+    try {
+      final r = await _dio.get<dynamic>('passengers/faq/');
+      if (r.statusCode != 200 || r.data == null) {
+        throw Exception(_err(r.data, 'FAQ'));
+      }
+      final data = r.data;
+      if (data is List) {
+        return data.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      return [];
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'FAQ'));
+    }
   }
 
   Future<void> logout() async {
