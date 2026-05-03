@@ -72,6 +72,7 @@ class OffersTab extends ConsumerWidget {
                                           await ref.read(invoApiProvider).acceptOffer(offerId as int);
                                           ref.invalidate(driverOffersProvider);
                                           ref.invalidate(driverOrdersProvider);
+                                          ref.invalidate(driverHistoryOrdersProvider);
                                           if (context.mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
                                               const SnackBar(content: Text('Заказ принят')),

@@ -37,9 +37,11 @@ dependencies:
   google_fonts: ^6.2.1
   url_launcher: ^6.3.1
   intl: ^0.20.2
-  flutter_map: ^8.2.2
-  latlong2: ^0.9.1
   webview_flutter: ^4.13.1
+  web_socket_channel: ^3.0.2
+  geolocator: ^14.0.2
+  invo_common:
+    path: ../invo_common
 
 dev_dependencies:
   flutter_test:
