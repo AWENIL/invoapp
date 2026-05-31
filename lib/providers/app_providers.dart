@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/invo_api.dart';
+import '../services/cabin_recording_service.dart';
 import '../services/driver_location_sync.dart';
 import '../services/token_storage.dart';
 
@@ -130,6 +131,13 @@ final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 final invoApiProvider = Provider<InvoApi>((ref) {
   final t = ref.watch(tokenStorageProvider);
   return InvoApi(t);
+});
+
+/// Запись салона во время поездки (один экземпляр на сессию водителя).
+final cabinRecordingServiceProvider = ChangeNotifierProvider<CabinRecordingService>((ref) {
+  final service = CabinRecordingService(ref.watch(invoApiProvider));
+  ref.onDispose(service.dispose);
+  return service;
 });
 
 /// Статистика водителя для вкладки «Профиль» и др.

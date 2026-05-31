@@ -41,6 +41,9 @@ dependencies:
   web_socket_channel: ^3.0.2
   geolocator: ^14.0.2
   file_picker: ^8.3.7
+  camera: ^0.11.1
+  permission_handler: ^11.4.0
+  path_provider: ^2.1.5
   invo_common:
     path: ../invo_common
 
@@ -54,6 +57,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  mocktail: ^1.0.5
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

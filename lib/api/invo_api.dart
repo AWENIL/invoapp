@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:camera/camera.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../config/env.dart';
 import '../services/token_storage.dart';
@@ -401,6 +403,123 @@ class InvoApi {
       return r.data!;
     } on DioException catch (e) {
       throw Exception(_err(e.response?.data, 'Жалоба'));
+    }
+  }
+
+  Future<void> startCabinRecording(String orderId) async {
+    try {
+      await _dio.post<Map<String, dynamic>>('drivers/order/$orderId/cabin-recording/start/');
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Старт записи салона'));
+    }
+  }
+
+  Future<void> uploadCabinFrame(String orderId, XFile frame) async {
+    try {
+      final bytes = await frame.readAsBytes();
+      final form = FormData.fromMap({
+        'frame': MultipartFile.fromBytes(
+          bytes,
+          filename: 'frame.jpg',
+        ),
+      });
+      await _dio.post<Map<String, dynamic>>(
+        'drivers/order/$orderId/cabin-recording/frame/',
+        data: form,
+      );
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Загрузка кадра'));
+    }
+  }
+
+  static String _cabinVideoFilename(XFile video) {
+    final name = video.name;
+    if (name.isNotEmpty) return name;
+    final path = video.path;
+    if (path.isNotEmpty) {
+      return path.replaceAll('\\', '/').split('/').last;
+    }
+    return kIsWeb ? 'recording.webm' : 'recording.mp4';
+  }
+
+  /// Multipart без загрузки всего файла в RAM на Android/iOS.
+  Future<MultipartFile> _cabinVideoMultipart(XFile video) async {
+    if (!kIsWeb) {
+      final path = video.path;
+      if (path.isNotEmpty) {
+        return MultipartFile.fromFile(
+          path,
+          filename: _cabinVideoFilename(video),
+        );
+      }
+    }
+    final bytes = await video.readAsBytes();
+    return MultipartFile.fromBytes(
+      bytes,
+      filename: _cabinVideoFilename(video),
+    );
+  }
+
+  Future<void> uploadCabinSegment(String orderId, int segmentIndex, XFile video) async {
+    try {
+      final form = FormData.fromMap({
+        'segment_index': segmentIndex,
+        'video': await _cabinVideoMultipart(video),
+      });
+      await _dio.post<Map<String, dynamic>>(
+        'drivers/order/$orderId/cabin-recording/segment/',
+        data: form,
+        options: Options(
+          sendTimeout: const Duration(minutes: 2),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      );
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Загрузка сегмента'));
+    }
+  }
+
+  Future<void> uploadCabinVideo(String orderId, XFile video) async {
+    try {
+      final form = FormData.fromMap({
+        'video': await _cabinVideoMultipart(video),
+      });
+      await _dio.post<Map<String, dynamic>>(
+        'drivers/order/$orderId/cabin-recording/video/',
+        data: form,
+        options: Options(
+          sendTimeout: const Duration(minutes: 5),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      );
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Загрузка видео'));
+    }
+  }
+
+  Future<void> finishCabinRecording(
+    String orderId, {
+    XFile? video,
+    int? segmentIndex,
+  }) async {
+    try {
+      final map = <String, dynamic>{};
+      if (video != null) {
+        map['video'] = await _cabinVideoMultipart(video);
+        if (segmentIndex != null) {
+          map['segment_index'] = segmentIndex;
+        }
+      }
+      await _dio.post<Map<String, dynamic>>(
+        'drivers/order/$orderId/cabin-recording/finish/',
+        data: map.isEmpty ? null : FormData.fromMap(map),
+        options: Options(
+          sendTimeout: const Duration(minutes: 10),
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      );
+    } on DioException catch (e) {
+      throw Exception(_err(e.response?.data, 'Завершение записи'));
     }
   }
 

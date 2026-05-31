@@ -6,6 +6,8 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/app_providers.dart';
+import '../services/cabin_recording_service.dart';
+import '../services/driver_camera_permission.dart';
 import '../services/driver_location_sync.dart';
 import '../widgets/driver_order_complaint_sheet.dart';
 import '../widgets/order_route_map.dart';
@@ -253,6 +255,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           );
       ref.invalidate(_orderDetailFamily(widget.orderId));
       ref.invalidate(driverOrdersProvider);
+      ref.invalidate(driverActiveOrderProvider);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
@@ -282,6 +285,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           );
       ref.invalidate(_orderDetailFamily(widget.orderId));
       ref.invalidate(driverOrdersProvider);
+      ref.invalidate(driverActiveOrderProvider);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
@@ -294,9 +298,46 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   Future<void> _patchStatus(String next, String reason) async {
     setState(() => _busy = true);
     try {
+      final currentStatus =
+          ref.read(_orderDetailFamily(widget.orderId)).valueOrNull?['status']?.toString() ?? '';
+      if (currentStatus == 'ride_ongoing' && next != 'ride_ongoing') {
+        await ref.read(cabinRecordingServiceProvider).stopAndUploadIfActive(widget.orderId);
+      }
+
+      // Камера: запрашиваем доступ в контексте жеста ДО сетевого запроса (важно для web/getUserMedia).
+      if (next == 'ride_ongoing' && CabinRecordingService.platformSupportsRecording) {
+        final granted = await DriverCameraPermission.ensureGranted();
+        if (!granted && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Камера недоступна — запись салона не будет вестись. '
+                'Разрешите камеру в настройках сайта (значок камеры в адресной строке).',
+              ),
+              duration: Duration(seconds: 6),
+            ),
+          );
+        }
+      }
+
       await ref.read(invoApiProvider).patchOrderStatus(widget.orderId, next, reason: reason);
       ref.invalidate(_orderDetailFamily(widget.orderId));
       ref.invalidate(driverOrdersProvider);
+      ref.invalidate(driverActiveOrderProvider);
+
+      if (next == 'ride_ongoing') {
+        final service = ref.read(cabinRecordingServiceProvider);
+        final ok = await service.syncWithOrder({
+          'id': widget.orderId,
+          'status': 'ride_ongoing',
+        });
+        if (mounted && !ok) {
+          final err = service.lastError ?? 'камера или сервер недоступны';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось начать запись салона: $err')),
+          );
+        }
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
@@ -934,6 +975,43 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         routeSubtitle(),
         const SizedBox(height: 16),
         if (status == 'ride_ongoing') ...[
+          Builder(
+            builder: (context) {
+              final recording = ref.watch(cabinRecordingServiceProvider);
+              final active = recording.isRecording;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: active ? Colors.red.shade50 : Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: active ? Colors.red.shade200 : Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      active ? Icons.fiber_manual_record : Icons.videocam_outlined,
+                      color: active ? Colors.red.shade700 : Colors.orange.shade800,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        active
+                            ? 'Идёт видеозапись салона. Фрагменты по 10 сек отправляются диспетчеру.'
+                            : 'Запуск записи салона… Если не началась — проверьте доступ к камере.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.35,
+                          color: active ? Colors.red.shade900 : Colors.orange.shade900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
           Text('Поездка', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
           const SizedBox(height: 8),
           _locationTile(icon: Icons.check_circle_outline, title: pickup, subtitle: 'Посадка'),

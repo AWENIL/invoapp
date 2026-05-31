@@ -47,5 +47,9 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Геолокация запрашивается при запуске приложения: диспетчер, заказы и построение маршрута к точке подачи.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Фронт-камера используется для записи салона во время поездки — диспетчер и служба безопасности могут просматривать трансляцию.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Микрофон может использоваться при видеозаписи салона во время поездки.</string>
 </dict>
 </plist>

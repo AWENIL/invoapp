@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_providers.dart';
+import '../services/cabin_recording_service.dart';
 import 'driver_history_tab.dart';
 import 'driver_trip_tab.dart';
 import 'orders_tab.dart';
@@ -26,6 +27,11 @@ class _DriverShellState extends ConsumerState<DriverShell> {
       if (!mounted) return;
       ref.invalidate(driverActiveOrderProvider);
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final order = ref.read(driverActiveOrderProvider);
+      order.whenData((o) => unawaited(_syncRecording(o)));
+    });
   }
 
   @override
@@ -34,18 +40,78 @@ class _DriverShellState extends ConsumerState<DriverShell> {
     super.dispose();
   }
 
+  Future<void> _syncRecording(Map<String, dynamic>? order) async {
+    final service = ref.read(cabinRecordingServiceProvider);
+    final ok = await service.syncWithOrder(order);
+    if (!mounted) return;
+    if (!ok &&
+        order != null &&
+        (orderMapFromActiveResponse(order)?['status']?.toString() == 'ride_ongoing')) {
+      final err = service.lastError;
+      if (err != null && err.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось начать запись салона: $err')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    ref.watch(driverActiveOrderProvider);
+    ref.listen(driverActiveOrderProvider, (prev, next) {
+      next.whenData((order) => unawaited(_syncRecording(order)));
+    });
+
     final tabIndex = ref.watch(driverShellTabIndexProvider);
+    final recording = ref.watch(cabinRecordingServiceProvider);
+
     return Scaffold(
-      body: IndexedStack(
-        index: tabIndex,
-        children: const [
-          OrdersTab(),
-          DriverTripTab(),
-          DriverHistoryTab(),
-          ProfileTab(),
+      body: Stack(
+        children: [
+          IndexedStack(
+            index: tabIndex,
+            children: const [
+              OrdersTab(),
+              DriverTripTab(),
+              DriverHistoryTab(),
+              ProfileTab(),
+            ],
+          ),
+          if (recording.isRecording)
+            Positioned(
+              top: MediaQuery.paddingOf(context).top + 8,
+              right: 12,
+              child: Material(
+                color: Colors.red.shade700,
+                borderRadius: BorderRadius.circular(20),
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        'REC',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
