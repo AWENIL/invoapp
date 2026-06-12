@@ -122,7 +122,6 @@ class _DriverPermissionsRootState extends ConsumerState<_DriverPermissionsRoot> 
                 cameraState: _cameraState,
                 onRetry: _retryCamera,
                 onOpenSettings: () => _openCameraSettings(ctx),
-                onSkip: () => setState(() => _phase = _StartupPhase.ready),
               );
             }
             return Scaffold(
@@ -196,21 +195,13 @@ class _CameraRequiredScreen extends StatelessWidget {
     required this.cameraState,
     required this.onRetry,
     required this.onOpenSettings,
-    required this.onSkip,
   });
 
   final CameraAccessState cameraState;
   final Future<void> Function() onRetry;
   final Future<void> Function() onOpenSettings;
-  final VoidCallback onSkip;
 
   bool get _isDenied => cameraState == CameraAccessState.denied;
-
-  /// Prompt/unknown — камера не запрашивалась, можно разрешить кнопкой.
-  bool get _canSkip =>
-      kIsWeb &&
-      (cameraState == CameraAccessState.prompt ||
-          cameraState == CameraAccessState.unknown);
 
   @override
   Widget build(BuildContext context) {
@@ -257,14 +248,6 @@ class _CameraRequiredScreen extends StatelessWidget {
                   child: Text(kIsWeb ? 'Как разрешить в Chrome' : 'Открыть настройки'),
                 ),
               ),
-              // На web при prompt/unknown — даём войти без камеры (запись не будет работать).
-              if (_canSkip) ...[
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () => onSkip(),
-                  child: const Text('Продолжить без записи'),
-                ),
-              ],
             ],
           ),
         ),

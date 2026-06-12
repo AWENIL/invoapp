@@ -3,6 +3,7 @@
 import 'dart:html' as html;
 
 import 'driver_camera_permission.dart';
+import 'web_camera_session.dart';
 
 Future<CameraAccessState> getCameraAccessState() async {
   try {
@@ -25,28 +26,12 @@ Future<CameraAccessState> getCameraAccessState() async {
 }
 
 Future<bool> isCameraGranted() async {
+  if (WebCameraSession.isActive) return true;
   final state = await getCameraAccessState();
   return state == CameraAccessState.granted;
 }
 
 Future<bool> ensureCameraGranted() async {
-  final mediaDevices = html.window.navigator.mediaDevices;
-  if (mediaDevices == null) return false;
-
-  html.MediaStream stream;
-  try {
-    stream = await mediaDevices.getUserMedia({'video': true, 'audio': false});
-  } catch (_) {
-    try {
-      stream = await mediaDevices.getUserMedia({
-        'video': {'facingMode': 'user'},
-        'audio': false,
-      });
-    } catch (_) {
-      return false;
-    }
-  }
-
-  stream.getTracks().forEach((track) => track.stop());
-  return true;
+  // Оставляем stream открытым — prepare() переиспользует его после PATCH.
+  return WebCameraSession.acquire();
 }

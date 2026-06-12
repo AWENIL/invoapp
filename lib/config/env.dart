@@ -1,4 +1,5 @@
-export 'package:invo_common/invo_common.dart' show yandexMapsApiKey;
+export 'package:invo_common/invo_common.dart'
+    show yandexMapsApiKey, yandexMapsSuggestApiKey;
 
 /// Базовый URL API без завершающего слэша.
 ///

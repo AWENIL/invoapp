@@ -64,6 +64,14 @@ class _DriverShellState extends ConsumerState<DriverShell> {
 
     final tabIndex = ref.watch(driverShellTabIndexProvider);
     final recording = ref.watch(cabinRecordingServiceProvider);
+    final showRecBadge = recording.isRecording ||
+        recording.pendingUploads > 0 ||
+        recording.failedUploads > 0;
+    final recLabel = recording.failedUploads > 0
+        ? 'Ошибка'
+        : recording.pendingUploads > 0
+            ? 'Загрузка…'
+            : 'REC';
 
     return Scaffold(
       body: Stack(
@@ -77,12 +85,14 @@ class _DriverShellState extends ConsumerState<DriverShell> {
               ProfileTab(),
             ],
           ),
-          if (recording.isRecording)
+          if (showRecBadge)
             Positioned(
               top: MediaQuery.paddingOf(context).top + 8,
               right: 12,
               child: Material(
-                color: Colors.red.shade700,
+                color: recording.failedUploads > 0
+                    ? Colors.orange.shade800
+                    : Colors.red.shade700,
                 borderRadius: BorderRadius.circular(20),
                 elevation: 4,
                 child: Padding(
@@ -90,18 +100,19 @@ class _DriverShellState extends ConsumerState<DriverShell> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
+                      if (recording.isRecording)
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text(
-                        'REC',
-                        style: TextStyle(
+                      if (recording.isRecording) const SizedBox(width: 6),
+                      Text(
+                        recLabel,
+                        style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
                           fontSize: 12,

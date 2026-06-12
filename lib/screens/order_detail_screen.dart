@@ -11,6 +11,7 @@ import '../services/driver_camera_permission.dart';
 import '../services/driver_location_sync.dart';
 import '../widgets/driver_order_complaint_sheet.dart';
 import '../widgets/order_route_map.dart';
+import 'driver_navigation_screen.dart';
 import 'driver_order_chat_screen.dart';
 
 final _orderDetailFamily = FutureProvider.family<Map<String, dynamic>, String>((ref, orderId) async {
@@ -304,19 +305,22 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         await ref.read(cabinRecordingServiceProvider).stopAndUploadIfActive(widget.orderId);
       }
 
-      // Камера: запрашиваем доступ в контексте жеста ДО сетевого запроса (важно для web/getUserMedia).
+      // Камера обязательна — без неё не переводим заказ в ride_ongoing.
       if (next == 'ride_ongoing' && CabinRecordingService.platformSupportsRecording) {
         final granted = await DriverCameraPermission.ensureGranted();
-        if (!granted && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Камера недоступна — запись салона не будет вестись. '
-                'Разрешите камеру в настройках сайта (значок камеры в адресной строке).',
+        if (!granted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Невозможно начать поездку без камеры. '
+                  'Разрешите камеру в настройках сайта (значок камеры в адресной строке).',
+                ),
+                duration: Duration(seconds: 6),
               ),
-              duration: Duration(seconds: 6),
-            ),
-          );
+            );
+          }
+          return;
         }
       }
 
@@ -445,8 +449,10 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
             _syncWaitSecondsFromOrder(order);
           });
         }
-        if (status == 'driver_en_route' || status == 'ride_ongoing' || status == 'arrived_waiting') {
+        if (status == 'arrived_waiting') {
           _ensureNavRefresh();
+        } else if (status == 'driver_en_route' || status == 'ride_ongoing') {
+          _stopNavRefresh();
         } else {
           _stopNavRefresh();
         }
@@ -484,6 +490,20 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     final dlat = (order['dropoff_lat'] as num?)?.toDouble();
     final dlon = (order['dropoff_lon'] as num?)?.toDouble();
     final mapH = MediaQuery.sizeOf(context).height * 0.40;
+
+    if (status == 'driver_en_route' || status == 'ride_ongoing') {
+      return DriverNavigationScreen(
+        orderId: widget.orderId,
+        order: order,
+        embeddedInShell: widget.embeddedInShell,
+        leg: status == 'driver_en_route' ? DriverNavLeg.toPickup : DriverNavLeg.toDropoff,
+        onStatusChanged: () {
+          ref.invalidate(_orderDetailFamily(widget.orderId));
+          ref.invalidate(driverOrdersProvider);
+          ref.invalidate(driverActiveOrderProvider);
+        },
+      );
+    }
 
     if (status == 'completed') {
       final w = order['waiting_time_minutes'];

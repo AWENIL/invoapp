@@ -52,8 +52,42 @@ class FakeCabinVideoCapture implements CabinVideoCapture {
   }
 }
 
-// ------------------------------------------------------------------ //
-// Хелперы                                                              //
+class FlakyCabinVideoCapture implements CabinVideoCapture {
+  bool _recording = false;
+  int prepareCallCount = 0;
+  int startCallCount = 0;
+  int failStartOnCall = 2;
+
+  @override
+  bool get isRecording => _recording;
+
+  @override
+  Future<bool> prepare() async {
+    prepareCallCount++;
+    return true;
+  }
+
+  @override
+  Future<void> startRecording() async {
+    startCallCount++;
+    if (startCallCount == failStartOnCall) {
+      throw StateError('rotate start failed');
+    }
+    _recording = true;
+  }
+
+  @override
+  Future<XFile?> stopRecording() async {
+    _recording = false;
+    return XFile.fromData(Uint8List(0), name: 'seg.webm', mimeType: 'video/webm');
+  }
+
+  @override
+  Future<void> dispose() async {
+    _recording = false;
+  }
+}
+
 // ------------------------------------------------------------------ //
 
 Map<String, dynamic> _orderMap(String id, {String status = 'ride_ongoing'}) =>
@@ -198,6 +232,66 @@ void main() {
       expect(svc.lastError, isNotNull);
       expect(svc.isRecording, isFalse);
       verifyNever(() => api.startCabinRecording(any()));
+
+      svc.dispose();
+    });
+    test('upload retry succeeds on 2nd attempt', () async {
+      var attempts = 0;
+      when(() => api.uploadCabinSegment(any(), any(), any())).thenAnswer((_) async {
+        attempts++;
+        if (attempts == 1) {
+          throw Exception('network');
+        }
+      });
+
+      final svc = _makeService(api, capture);
+      await svc.syncWithOrder(_orderMap('order-retry'));
+      await svc.rotateSegmentForTest();
+      await Future<void>.delayed(const Duration(seconds: 3));
+
+      expect(attempts, equals(2));
+      expect(svc.failedUploads, equals(0));
+
+      svc.dispose();
+    });
+
+    test('serial queue: two segments do not upload in parallel', () async {
+      var inFlight = 0;
+      var maxInFlight = 0;
+
+      when(() => api.uploadCabinSegment(any(), any(), any())).thenAnswer((_) async {
+        inFlight++;
+        if (inFlight > maxInFlight) maxInFlight = inFlight;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        inFlight--;
+      });
+
+      final svc = _makeService(api, capture);
+      await svc.syncWithOrder(_orderMap('order-serial'));
+      await svc.rotateSegmentForTest();
+      await svc.rotateSegmentForTest();
+      await Future<void>.delayed(const Duration(seconds: 1));
+
+      expect(maxInFlight, equals(1));
+
+      svc.dispose();
+    });
+
+    test('recover after failed rotate restart', () async {
+      final flaky = FlakyCabinVideoCapture();
+
+      final svc = CabinRecordingService(
+        api,
+        captureFactory: () async => flaky,
+        watchdogInterval: const Duration(milliseconds: 100),
+      );
+      await svc.syncWithOrder(_orderMap('order-recover'));
+      expect(svc.isRecording, isTrue);
+
+      await svc.rotateSegmentForTest();
+      expect(flaky.startCallCount, greaterThanOrEqualTo(2));
+      expect(flaky.prepareCallCount, greaterThanOrEqualTo(2));
+      expect(svc.isRecording, isTrue);
 
       svc.dispose();
     });

@@ -8,11 +8,13 @@ import 'package:camera/camera.dart';
 
 import 'cabin_recording_settings.dart';
 import 'cabin_video_capture.dart';
+import 'web_camera_session.dart';
 
 Future<CabinVideoCapture> createCabinVideoCapture() async => WebCabinVideoCapture();
 
 class WebCabinVideoRecorder {
   html.MediaStream? _stream;
+  bool _ownsStream = false;
   html.MediaRecorder? _recorder;
   final List<html.Blob> _chunks = [];
   Completer<XFile?>? _stopCompleter;
@@ -20,33 +22,68 @@ class WebCabinVideoRecorder {
 
   bool get isRecording => _recorder?.state == 'recording';
 
+  static bool _isMobileWeb() {
+    final ua = html.window.navigator.userAgent.toLowerCase();
+    return ua.contains('mobile') ||
+        ua.contains('android') ||
+        ua.contains('iphone') ||
+        ua.contains('ipad');
+  }
+
+  static Object _lightVideoConstraints({bool preferFront = false}) {
+    if (preferFront && _isMobileWeb()) {
+      return {
+        'facingMode': 'user',
+        'width': {'ideal': 320},
+        'height': {'ideal': 240},
+        'frameRate': {
+          'ideal': CabinRecordingSettings.fps,
+          'max': CabinRecordingSettings.maxFps,
+        },
+      };
+    }
+    return {
+      'width': {'ideal': 320},
+      'height': {'ideal': 240},
+      'frameRate': {
+        'ideal': CabinRecordingSettings.fps,
+        'max': CabinRecordingSettings.maxFps,
+      },
+    };
+  }
+
   Future<bool> prepare() async {
-    await dispose();
+    await _disposeRecorder();
+
+    final sessionStream = WebCameraSession.stream;
+    if (sessionStream is html.MediaStream) {
+      _stream = sessionStream;
+      _ownsStream = false;
+      _mimeType = _pickMimeType();
+      return true;
+    }
+
     _mimeType = _pickMimeType();
     final media = html.window.navigator.mediaDevices;
     if (media == null) return false;
 
     try {
-      _stream = await media.getUserMedia({
-        'audio': false,
-        'video': {
-          'facingMode': 'user',
-          'width': {'ideal': 320},
-          'height': {'ideal': 240},
-          'frameRate': {
-            'ideal': CabinRecordingSettings.fps,
-            'max': CabinRecordingSettings.maxFps,
-          },
-        },
-      });
+      _stream = await media.getUserMedia({'audio': false, 'video': true});
     } catch (_) {
-      // Попытка без facingMode (fallback для камер без front-facing).
       try {
-        _stream = await media.getUserMedia({'audio': false, 'video': true});
+        _stream = await media.getUserMedia({
+          'audio': false,
+          'video': _lightVideoConstraints(preferFront: true),
+        });
       } catch (_) {
-        return false;
+        try {
+          _stream = await media.getUserMedia({'audio': false, 'video': true});
+        } catch (_) {
+          return false;
+        }
       }
     }
+    _ownsStream = true;
     return _stream != null;
   }
 
@@ -74,7 +111,8 @@ class WebCabinVideoRecorder {
       unawaited(_completeRecording());
     });
 
-    _recorder!.start();
+    // Timeslice — чанки каждые 2s, меньше RAM при сбое stop.
+    _recorder!.start(2000);
   }
 
   Future<void> _completeRecording() async {
@@ -125,7 +163,7 @@ class WebCabinVideoRecorder {
     }
   }
 
-  Future<void> dispose() async {
+  Future<void> _disposeRecorder() async {
     final recorder = _recorder;
     if (recorder != null && recorder.state == 'recording') {
       try {
@@ -137,10 +175,19 @@ class WebCabinVideoRecorder {
     _recorder = null;
     _stopCompleter = null;
     _chunks.clear();
+  }
 
-    final stream = _stream;
-    _stream = null;
-    stream?.getTracks().forEach((track) => track.stop());
+  Future<void> dispose() async {
+    await _disposeRecorder();
+
+    if (_ownsStream) {
+      final stream = _stream;
+      _stream = null;
+      stream?.getTracks().forEach((track) => track.stop());
+    } else {
+      _stream = null;
+    }
+    _ownsStream = false;
   }
 
   static String _pickMimeType() {
