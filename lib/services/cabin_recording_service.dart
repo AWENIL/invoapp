@@ -110,7 +110,7 @@ class CabinRecordingService extends ChangeNotifier {
     _starting = true;
     lastError = null;
     try {
-      await _stop(finishOnServer: false);
+      await _stop(finishOnServer: false, releaseCameraSession: false);
 
       final capture = await _captureFactory();
       final bool prepared;
@@ -277,7 +277,7 @@ class CabinRecordingService extends ChangeNotifier {
     _uploadWorkerRunning = false;
   }
 
-  Future<void> _stop({bool finishOnServer = true}) async {
+  Future<void> _stop({bool finishOnServer = true, bool releaseCameraSession = true}) async {
     final orderId = _activeOrderId;
     _activeOrderId = null;
     _segmentTimer?.cancel();
@@ -306,7 +306,7 @@ class CabinRecordingService extends ChangeNotifier {
       }
     }
 
-    if (kIsWeb) {
+    if (kIsWeb && releaseCameraSession) {
       WebCameraSession.release();
     }
 

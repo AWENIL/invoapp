@@ -46,6 +46,7 @@ dependencies:
   path_provider: ^2.1.5
   invo_common:
     path: ../invo_common
+  pointer_interceptor: ^0.10.1
 
 dev_dependencies:
   flutter_test:

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:invo_common/invo_common.dart';
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/app_providers.dart';
@@ -92,19 +93,27 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
   }
 
   Future<void> _bootstrap() async {
-    final pos = await DriverLocationSync.getCurrentPositionOrNull();
+    final permissionFuture = _locationService.ensurePermission();
+    final posFuture = DriverLocationSync.getCurrentPositionOrNull();
+
+    // Не ждём GPS — маршрут сразу с сервера (координаты водителя из БД или точка посадки).
+    unawaited(_fetchRoute(force: true));
+
+    final ok = await permissionFuture;
+    if (!mounted) return;
+    if (!ok) {
+      setState(() => _locationDenied = true);
+    }
+
+    final pos = await posFuture;
     if (mounted && pos != null) {
       setState(() {
         _driverLat = pos.latitude;
         _driverLon = pos.longitude;
       });
+      await _fetchRoute(force: true);
     }
-    final ok = await _locationService.ensurePermission();
-    if (!mounted) return;
-    if (!ok) {
-      setState(() => _locationDenied = true);
-    }
-    await _fetchRoute(force: true);
+
     _locationService.start(
       onUpdate: (pos) {
         if (!mounted) return;
@@ -153,7 +162,11 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
               fromLat: fromLat,
               fromLon: fromLon,
             );
-      if (!mounted || data == null) return;
+      if (!mounted) return;
+      if (data == null) {
+        setState(() => _loadingRoute = false);
+        return;
+      }
       final polyline = parseRoadRoutePoints(data) ?? [];
       final steps = parseDriverRouteSteps(data);
       final tracker = DriverRouteProgressTracker(
@@ -288,11 +301,12 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
     final snap = _snapshot;
     final step = snap?.nextStep;
     final icon = step == null ? Icons.navigation_outlined : maneuverIcon(step.maneuver);
-    return SafeArea(
-      bottom: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 12, 0),
-        child: Row(
+    return PointerInterceptor(
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 12, 0),
+          child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Material(
@@ -331,6 +345,7 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -355,11 +370,12 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
       snap: true,
       snapSizes: const [0.22, 0.55],
       builder: (context, scrollController) {
-        return Material(
-          color: Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          elevation: 12,
-          child: ListView(
+        return PointerInterceptor(
+          child: Material(
+            color: Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            elevation: 12,
+            child: ListView(
             controller: scrollController,
             padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
             children: [
@@ -441,6 +457,7 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
               ],
             ],
           ),
+        ),
         );
       },
     );
