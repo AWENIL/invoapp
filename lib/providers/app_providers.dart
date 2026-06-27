@@ -43,6 +43,15 @@ DateTime? _orderDateHint(Map<String, dynamic> o) {
 /// Один порядок для главного списка и вкладки «Поездка» (первый — текущий к исполнению).
 List<Map<String, dynamic>> sortDriverActiveOrders(List<Map<String, dynamic>> orders) {
   final copy = orders.map((e) => Map<String, dynamic>.from(e)).toList();
+  final hasQueueIndex = copy.any((o) => o['queue_index'] is num);
+  if (hasQueueIndex) {
+    copy.sort((a, b) {
+      final ia = (a['queue_index'] as num?)?.toInt() ?? 999;
+      final ib = (b['queue_index'] as num?)?.toInt() ?? 999;
+      return ia.compareTo(ib);
+    });
+    return copy;
+  }
   copy.sort((a, b) {
     final sa = a['status']?.toString() ?? '';
     final sb = b['status']?.toString() ?? '';
@@ -75,11 +84,25 @@ List<Map<String, dynamic>> sortDriverHistoryOrders(List<Map<String, dynamic>> or
   return copy;
 }
 
+/// Инвалидация очереди и маршрутного листа (единая точка для pull-to-refresh и WebSocket).
+void invalidateDriverOrderQueue(WidgetRef ref) {
+  ref.invalidate(driverOrderQueueProvider);
+  ref.invalidate(driverDayRouteProvider);
+}
+
+final driverOrderQueueProvider =
+    FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
+  return ref.watch(invoApiProvider).getOrderQueue();
+});
+
+final driverDayRouteProvider =
+    FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
+  return ref.watch(invoApiProvider).getDayRoute();
+});
+
 final driverOrdersProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final raw = await ref
-      .watch(invoApiProvider)
-      .getOrders(status: driverActiveOrderStatuses);
+  final raw = await ref.watch(driverOrderQueueProvider.future);
   final results = raw['results'];
   if (results is List) {
     final list =

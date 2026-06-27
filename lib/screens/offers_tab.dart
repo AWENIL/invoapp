@@ -50,7 +50,7 @@ class OffersTab extends ConsumerWidget {
                                         try {
                                           await ref.read(invoApiProvider).declineOffer(offerId as int);
                                           ref.invalidate(driverOffersProvider);
-                                          ref.invalidate(driverOrdersProvider);
+                                          invalidateDriverOrderQueue(ref);
                                         } catch (e) {
                                           if (context.mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(
@@ -71,7 +71,7 @@ class OffersTab extends ConsumerWidget {
                                         try {
                                           await ref.read(invoApiProvider).acceptOffer(offerId as int);
                                           ref.invalidate(driverOffersProvider);
-                                          ref.invalidate(driverOrdersProvider);
+                                          invalidateDriverOrderQueue(ref);
                                           ref.invalidate(driverHistoryOrdersProvider);
                                           if (context.mounted) {
                                             ScaffoldMessenger.of(context).showSnackBar(

@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/app_providers.dart';
 import '../theme/driver_auth_theme.dart';
+import 'driver_day_route_screen.dart';
 import 'driver_order_chat_screen.dart';
 import 'offers_tab.dart';
 import 'order_detail_screen.dart';
@@ -72,6 +73,44 @@ String _scheduledTimeBadge(Map<String, dynamic> o) {
   return '$dayPart, $hm';
 }
 
+Map<String, Map<String, dynamic>> _dayRouteOrderIndex(Map<String, dynamic>? route) {
+  if (route == null) return {};
+  final orders = route['orders'];
+  if (orders is! List) return {};
+  final map = <String, Map<String, dynamic>>{};
+  for (final o in orders) {
+    if (o is! Map) continue;
+    final id = o['id']?.toString();
+    if (id != null && id.isNotEmpty) {
+      map[id] = Map<String, dynamic>.from(o);
+    }
+  }
+  return map;
+}
+
+(List<Map<String, dynamic>>, List<Map<String, dynamic>>) _splitQueueSections(
+  List<Map<String, dynamic>> orders,
+) {
+  if (orders.isEmpty) return ([], []);
+  final hasMeta = orders.any((o) => o['is_current'] == true || o['queue_index'] is num);
+  if (!hasMeta) {
+    return ([orders.first], orders.sublist(1));
+  }
+  final current = <Map<String, dynamic>>[];
+  final next = <Map<String, dynamic>>[];
+  for (final o in orders) {
+    if (o['is_current'] == true || (o['queue_index'] as num?)?.toInt() == 1) {
+      current.add(o);
+    } else {
+      next.add(o);
+    }
+  }
+  if (current.isEmpty && orders.isNotEmpty) {
+    return ([orders.first], orders.sublist(1));
+  }
+  return (current, next);
+}
+
 /// Круглые действия светло‑кораловые как в UI‑ките.
 Widget _circleAction({
   required IconData icon,
@@ -100,6 +139,11 @@ class OrdersTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final async = ref.watch(driverOrdersProvider);
+    final dayRouteAsync = ref.watch(driverDayRouteProvider);
+    final dayIndex = dayRouteAsync.maybeWhen(
+      data: _dayRouteOrderIndex,
+      orElse: () => <String, Map<String, dynamic>>{},
+    );
     final subtleBg = DriverAuthColors.background;
 
     return Scaffold(
@@ -109,9 +153,26 @@ class OrdersTab extends ConsumerWidget {
         error: (e, _) =>
             Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('$e'))),
         data: (orders) {
+          final (currentOrders, nextOrders) = _splitQueueSections(orders);
+          final routeDate = dayRouteAsync.maybeWhen(
+            data: (r) => r['date']?.toString(),
+            orElse: () => null,
+          );
+          final routeTotal = dayRouteAsync.maybeWhen(
+            data: (r) => (r['total_orders'] as num?)?.toInt(),
+            orElse: () => orders.length,
+          );
+          final dateLabel = () {
+            final parsed = DateTime.tryParse(routeDate ?? '');
+            if (parsed != null) {
+              return DateFormat('d MMMM', 'ru').format(parsed);
+            }
+            return DateFormat('d MMMM', 'ru').format(DateTime.now());
+          }();
+
           return RefreshIndicator(
             color: DriverAuthColors.primary,
-            onRefresh: () async => ref.invalidate(driverOrdersProvider),
+            onRefresh: () async => invalidateDriverOrderQueue(ref),
             child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               slivers: [
@@ -151,6 +212,63 @@ class OrdersTab extends ConsumerWidget {
                     ),
                   ),
                 ),
+                if (orders.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      child: Material(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const DriverDayRouteScreen(),
+                              ),
+                            );
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                            child: Row(
+                              children: [
+                                Icon(Icons.route_rounded, color: DriverAuthColors.primary),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Маршрут на $dateLabel',
+                                        style: theme.textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      Text(
+                                        '$routeTotal заказов',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: DriverAuthColors.secondaryText,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Text(
+                                  'Весь лист',
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    color: DriverAuthColors.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(Icons.chevron_right, color: DriverAuthColors.primary),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 if (orders.isEmpty)
                   SliverFillRemaining(
                     hasScrollBody: false,
@@ -167,63 +285,121 @@ class OrdersTab extends ConsumerWidget {
                       ),
                     ),
                   )
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-                    sliver: SliverList.separated(
-                      itemCount: orders.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 12),
-                      itemBuilder: (context, i) {
-                        final order = orders[i];
-                        final isNext = i == 0;
-                        return _DriverOrderCard(
-                          order: order,
-                          highlightQueue: isNext,
-                          onOpenDetail: () async {
-                            final id = order['id']?.toString() ?? '';
-                            await Navigator.of(context).push<void>(
-                              MaterialPageRoute<void>(
-                                builder: (_) => OrderDetailScreen(orderId: id),
-                              ),
-                            );
-                            ref.invalidate(driverOrdersProvider);
-                          },
-                          onChat: () {
-                            final id = order['id']?.toString() ?? '';
-                            Navigator.of(context).push<void>(
-                              MaterialPageRoute<void>(
-                                builder: (_) => DriverOrderChatScreen(
-                                  orderId: id,
-                                  passengerName: _passengerShortDisplayName(order),
-                                  passengerPhone: _passengerDialPhone(order),
-                                ),
-                              ),
-                            );
-                          },
-                          onPhone: () async {
-                            final ph = _passengerDialPhone(order);
-                            if (ph == null || ph.isEmpty) {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Телефон пассажира не указан')),
-                                );
-                              }
-                              return;
-                            }
-                            final u = _telUri(ph);
-                            if (u != null && await canLaunchUrl(u)) {
-                              await launchUrl(u);
-                            }
-                          },
-                        );
-                      },
+                else ...[
+                  if (currentOrders.isNotEmpty) ...[
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                        child: Text(
+                          'Сейчас',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: DriverAuthColors.primary,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      sliver: SliverList.separated(
+                        itemCount: currentOrders.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 12),
+                        itemBuilder: (context, i) => _buildOrderCard(
+                          context,
+                          ref,
+                          currentOrders[i],
+                          highlightQueue: true,
+                          dayIndex: dayIndex,
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (nextOrders.isNotEmpty) ...[
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                        child: Text(
+                          'Далее (${nextOrders.length})',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+                      sliver: SliverList.separated(
+                        itemCount: nextOrders.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 12),
+                        itemBuilder: (context, i) => _buildOrderCard(
+                          context,
+                          ref,
+                          nextOrders[i],
+                          highlightQueue: false,
+                          dayIndex: dayIndex,
+                        ),
+                      ),
+                    ),
+                  ] else
+                    const SliverToBoxAdapter(child: SizedBox(height: 96)),
+                ],
               ],
             ),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildOrderCard(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> order, {
+    required bool highlightQueue,
+    required Map<String, Map<String, dynamic>> dayIndex,
+  }) {
+    final id = order['id']?.toString() ?? '';
+    final dayMeta = dayIndex[id];
+    final batchSize = dayMeta?['pickup_batch_size'] ?? order['pickup_batch_size'];
+
+    return _DriverOrderCard(
+      order: order,
+      highlightQueue: highlightQueue,
+      pickupBatchSize: batchSize is num ? batchSize.toInt() : null,
+      onOpenDetail: () async {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => OrderDetailScreen(orderId: id),
+          ),
+        );
+        invalidateDriverOrderQueue(ref);
+      },
+      onChat: () {
+        Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => DriverOrderChatScreen(
+              orderId: id,
+              passengerName: _passengerShortDisplayName(order),
+              passengerPhone: _passengerDialPhone(order),
+            ),
+          ),
+        );
+      },
+      onPhone: () async {
+        final ph = _passengerDialPhone(order);
+        if (ph == null || ph.isEmpty) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Телефон пассажира не указан')),
+            );
+          }
+          return;
+        }
+        final u = _telUri(ph);
+        if (u != null && await canLaunchUrl(u)) {
+          await launchUrl(u);
+        }
+      },
     );
   }
 }
@@ -235,6 +411,7 @@ class _DriverOrderCard extends StatelessWidget {
     required this.onOpenDetail,
     required this.onChat,
     required this.onPhone,
+    this.pickupBatchSize,
   });
 
   final Map<String, dynamic> order;
@@ -242,6 +419,7 @@ class _DriverOrderCard extends StatelessWidget {
   final VoidCallback onOpenDetail;
   final VoidCallback onChat;
   final VoidCallback onPhone;
+  final int? pickupBatchSize;
 
   @override
   Widget build(BuildContext context) {
@@ -250,6 +428,8 @@ class _DriverOrderCard extends StatelessWidget {
     final dropoff = order['dropoff_title']?.toString() ?? '—';
     final timeBadge = _scheduledTimeBadge(order);
     final passenger = _passengerShortDisplayName(order);
+    final qIdx = (order['queue_index'] as num?)?.toInt();
+    final qTotal = (order['queue_total'] as num?)?.toInt();
 
     final borderColor =
         highlightQueue ? DriverAuthColors.primary : DriverAuthColors.border.withValues(alpha: 0.65);
@@ -307,7 +487,24 @@ class _DriverOrderCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  if (qIdx != null && qTotal != null)
+                    Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: highlightQueue
+                            ? DriverAuthColors.primary.withValues(alpha: 0.14)
+                            : Colors.grey.shade100,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '$qIdx из $qTotal',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: highlightQueue ? DriverAuthColors.primary : null,
+                        ),
+                      ),
+                    ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -345,6 +542,25 @@ class _DriverOrderCard extends StatelessWidget {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                ),
+              if (pickupBatchSize != null && pickupBatchSize! > 1)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Text(
+                      'Групповая подача · $pickupBatchSize',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),

@@ -248,6 +248,27 @@ class InvoApi {
     return r.data!;
   }
 
+  /// Очередь активных заказов в порядке исполнения (queue_index, is_current).
+  Future<Map<String, dynamic>> getOrderQueue() async {
+    final r = await _dio.get<Map<String, dynamic>>('drivers/order-queue/');
+    if (r.statusCode != 200 || r.data == null) {
+      throw Exception(_err(r.data, 'Очередь заказов'));
+    }
+    return r.data!;
+  }
+
+  /// Маршрутный лист водителя на день.
+  Future<Map<String, dynamic>> getDayRoute({String? date}) async {
+    final r = await _dio.get<Map<String, dynamic>>(
+      'drivers/day-route/',
+      queryParameters: {if (date != null && date.isNotEmpty) 'date': date},
+    );
+    if (r.statusCode != 200 || r.data == null) {
+      throw Exception(_err(r.data, 'Маршрут на день'));
+    }
+    return r.data!;
+  }
+
   Future<Map<String, dynamic>> getOffers() async {
     final r = await _dio.get<Map<String, dynamic>>('drivers/offers/');
     if (r.statusCode != 200 || r.data == null) {

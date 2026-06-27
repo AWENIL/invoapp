@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/app_providers.dart';
 import '../services/cabin_recording_service.dart';
+import '../services/driver_realtime_socket.dart';
 import 'driver_history_tab.dart';
 import 'driver_trip_tab.dart';
 import 'orders_tab.dart';
@@ -19,16 +20,19 @@ class DriverShell extends ConsumerStatefulWidget {
 
 class _DriverShellState extends ConsumerState<DriverShell> {
   Timer? _activeOrderPoll;
+  DriverRealtimeSocket? _realtimeSocket;
 
   @override
   void initState() {
     super.initState();
     _activeOrderPoll = Timer.periodic(const Duration(seconds: 25), (_) {
       if (!mounted) return;
+      invalidateDriverOrderQueue(ref);
       ref.invalidate(driverActiveOrderProvider);
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _connectRealtimeIfNeeded();
       final order = ref.read(driverActiveOrderProvider);
       order.whenData((o) => unawaited(_syncRecording(o)));
     });
@@ -37,7 +41,27 @@ class _DriverShellState extends ConsumerState<DriverShell> {
   @override
   void dispose() {
     _activeOrderPoll?.cancel();
+    _realtimeSocket?.disconnect();
     super.dispose();
+  }
+
+  Future<void> _connectRealtimeIfNeeded() async {
+    final session = ref.read(sessionProvider).valueOrNull;
+    if (session == null) return;
+    final driverId = session.profile['id']?.toString();
+    if (driverId == null || driverId.isEmpty) return;
+    final token = await ref.read(tokenStorageProvider).readAccess();
+    if (!mounted || token == null || token.isEmpty) return;
+    _realtimeSocket ??= DriverRealtimeSocket();
+    _realtimeSocket!.connect(
+      driverId: driverId,
+      token: token,
+      onMessage: (message) {
+        if (message['type'] == 'queue_updated') {
+          invalidateDriverOrderQueue(ref);
+        }
+      },
+    );
   }
 
   Future<void> _syncRecording(Map<String, dynamic>? order) async {
@@ -58,12 +82,19 @@ class _DriverShellState extends ConsumerState<DriverShell> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(sessionProvider, (prev, next) {
+      next.whenData((_) => _connectRealtimeIfNeeded());
+    });
     ref.listen(driverActiveOrderProvider, (prev, next) {
       next.whenData((order) => unawaited(_syncRecording(order)));
     });
 
     final tabIndex = ref.watch(driverShellTabIndexProvider);
     final recording = ref.watch(cabinRecordingServiceProvider);
+    final queueCount = ref.watch(driverOrderQueueProvider).maybeWhen(
+          data: (q) => (q['count'] as num?)?.toInt() ?? 0,
+          orElse: () => 0,
+        );
     final showRecBadge = recording.isRecording ||
         recording.pendingUploads > 0 ||
         recording.failedUploads > 0;
@@ -128,23 +159,31 @@ class _DriverShellState extends ConsumerState<DriverShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: tabIndex,
         onDestinationSelected: (i) => ref.read(driverShellTabIndexProvider.notifier).state = i,
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
+            icon: Badge(
+              isLabelVisible: queueCount > 1,
+              label: Text('$queueCount'),
+              child: const Icon(Icons.home_outlined),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: queueCount > 1,
+              label: Text('$queueCount'),
+              child: const Icon(Icons.home),
+            ),
             label: 'Заказ',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.place_outlined),
             selectedIcon: Icon(Icons.place),
             label: 'Поездка',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.favorite_outline),
             selectedIcon: Icon(Icons.favorite),
             label: 'История',
           ),
-          NavigationDestination(icon: Icon(Icons.person_outline), label: 'Профиль'),
+          const NavigationDestination(icon: Icon(Icons.person_outline), label: 'Профиль'),
         ],
       ),
     );

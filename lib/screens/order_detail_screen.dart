@@ -90,6 +90,14 @@ String _shortPassengerLabel(String? full) {
   return '${parts[0]} ${second[0].toUpperCase()}.';
 }
 
+String? _scheduledPickupHm(Map<String, dynamic> order) {
+  final raw = order['desired_pickup_time']?.toString();
+  if (raw == null) return null;
+  final dt = DateTime.tryParse(raw);
+  if (dt == null) return null;
+  return DateFormat('HH:mm').format(dt.toLocal());
+}
+
 class OrderDetailScreen extends ConsumerStatefulWidget {
   const OrderDetailScreen({
     super.key,
@@ -116,11 +124,22 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   Map<String, dynamic>? _activeMeta;
   bool _busy = false;
   String? _lastFetchedMetaStatus;
+  Map<String, dynamic>? _nextAfterComplete;
+  bool _fetchingNextAfterComplete = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadNavOrigin());
+  }
+
+  @override
+  void didUpdateWidget(OrderDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orderId != widget.orderId) {
+      _nextAfterComplete = null;
+      _fetchingNextAfterComplete = false;
+    }
   }
 
   @override
@@ -132,13 +151,110 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   }
 
   void _onCompletedDismiss(BuildContext context) {
-    ref.invalidate(driverOrdersProvider);
+    invalidateDriverOrderQueue(ref);
     ref.invalidate(driverHistoryOrdersProvider);
     if (widget.embeddedInShell) {
       ref.read(driverShellTabIndexProvider.notifier).state = 0;
     } else if (context.mounted && Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
+  }
+
+  void _goToNextOrder(BuildContext context, Map<String, dynamic> next) {
+    invalidateDriverOrderQueue(ref);
+    ref.invalidate(driverHistoryOrdersProvider);
+    final nextId = next['id']?.toString() ?? '';
+    if (widget.embeddedInShell) {
+      ref.read(driverShellTabIndexProvider.notifier).state = 1;
+      if (nextId.isNotEmpty) {
+        ref.invalidate(_orderDetailFamily(nextId));
+      }
+    } else {
+      if (context.mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      ref.read(driverShellTabIndexProvider.notifier).state = 1;
+    }
+  }
+
+  Future<void> _offerNextOrderOrDismiss(BuildContext context) async {
+    try {
+      final raw = await ref.read(invoApiProvider).getOrderQueue();
+      final results = raw['results'];
+      if (results is List && results.isNotEmpty) {
+        final next = Map<String, dynamic>.from(results.first as Map);
+        if (!context.mounted) return;
+        final name = _shortPassengerLabel(_passengerNameFromOrder(next));
+        final pickup = next['pickup_title']?.toString() ?? '—';
+        final rawTime = next['desired_pickup_time']?.toString();
+        final time = rawTime != null
+            ? DateFormat('HH:mm').format(
+                (DateTime.tryParse(rawTime) ?? DateTime.now()).toLocal(),
+              )
+            : '';
+        await showModalBottomSheet<void>(
+          context: context,
+          showDragHandle: true,
+          builder: (ctx) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Следующий заказ',
+                  style: Theme.of(ctx).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 12),
+                Text(name, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                if (time.isNotEmpty) Text('Подача $time'),
+                Text(pickup, style: TextStyle(color: Colors.grey.shade700)),
+                const SizedBox(height: 20),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _primaryOrange,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _goToNextOrder(context, next);
+                  },
+                  child: const Text('Следующий заказ'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _onCompletedDismiss(context);
+                  },
+                  child: const Text('Позже'),
+                ),
+              ],
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (_) {}
+    _onCompletedDismiss(context);
+  }
+
+  void _ensureNextAfterComplete() {
+    if (_nextAfterComplete != null || _fetchingNextAfterComplete) return;
+    _fetchingNextAfterComplete = true;
+    ref.read(invoApiProvider).getOrderQueue().then((raw) {
+      if (!mounted) return;
+      final results = raw['results'];
+      Map<String, dynamic>? next;
+      if (results is List && results.isNotEmpty) {
+        next = Map<String, dynamic>.from(results.first as Map);
+      }
+      setState(() {
+        _nextAfterComplete = next;
+        _fetchingNextAfterComplete = false;
+      });
+    }).catchError((_) {
+      if (mounted) setState(() => _fetchingNextAfterComplete = false);
+    });
   }
 
   void _ensureWaitTicker() {
@@ -255,7 +371,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
             reason: 'Прибыл',
           );
       ref.invalidate(_orderDetailFamily(widget.orderId));
-      ref.invalidate(driverOrdersProvider);
+      invalidateDriverOrderQueue(ref);
       ref.invalidate(driverActiveOrderProvider);
     } catch (e) {
       if (mounted) {
@@ -285,7 +401,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
             reason: 'Выехал к точке забора',
           );
       ref.invalidate(_orderDetailFamily(widget.orderId));
-      ref.invalidate(driverOrdersProvider);
+      invalidateDriverOrderQueue(ref);
       ref.invalidate(driverActiveOrderProvider);
     } catch (e) {
       if (mounted) {
@@ -326,8 +442,13 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
       await ref.read(invoApiProvider).patchOrderStatus(widget.orderId, next, reason: reason);
       ref.invalidate(_orderDetailFamily(widget.orderId));
-      ref.invalidate(driverOrdersProvider);
-      ref.invalidate(driverActiveOrderProvider);
+      if (next == 'completed') {
+        ref.invalidate(driverActiveOrderProvider);
+        ref.invalidate(driverHistoryOrdersProvider);
+      } else {
+        invalidateDriverOrderQueue(ref);
+        ref.invalidate(driverActiveOrderProvider);
+      }
 
       if (next == 'ride_ongoing') {
         final service = ref.read(cabinRecordingServiceProvider);
@@ -462,6 +583,11 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           _lastFetchedMetaStatus = status;
           _refreshActiveMeta(status, widget.orderId);
         });
+        if (status == 'completed') {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _ensureNextAfterComplete();
+          });
+        }
 
         return Theme(
           data: _tripLightTheme(),
@@ -469,18 +595,35 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
               ? Stack(
                   fit: StackFit.expand,
                   children: [
-                    Positioned.fill(child: _buildTripScaffold(context, order, status)),
+                    Positioned.fill(
+                      child: _buildTripScaffold(
+                        context,
+                        order,
+                        status,
+                        nextQueueOrder: status == 'completed' ? _nextAfterComplete : null,
+                      ),
+                    ),
                     const ModalBarrier(dismissible: false, color: Color(0x33000000)),
                     const Center(child: CircularProgressIndicator()),
                   ],
                 )
-              : _buildTripScaffold(context, order, status),
+              : _buildTripScaffold(
+                  context,
+                  order,
+                  status,
+                  nextQueueOrder: status == 'completed' ? _nextAfterComplete : null,
+                ),
         );
       },
     );
   }
 
-  Widget _buildTripScaffold(BuildContext context, Map<String, dynamic> order, String status) {
+  Widget _buildTripScaffold(
+    BuildContext context,
+    Map<String, dynamic> order,
+    String status, {
+    Map<String, dynamic>? nextQueueOrder,
+  }) {
     final pickup = order['pickup_title']?.toString() ?? '';
     final dropObj = order['dropoff_object_name']?.toString().trim();
     final dropTitle = order['dropoff_title']?.toString() ?? '';
@@ -499,7 +642,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         leg: status == 'driver_en_route' ? DriverNavLeg.toPickup : DriverNavLeg.toDropoff,
         onStatusChanged: () {
           ref.invalidate(_orderDetailFamily(widget.orderId));
-          ref.invalidate(driverOrdersProvider);
+          invalidateDriverOrderQueue(ref);
           ref.invalidate(driverActiveOrderProvider);
         },
       );
@@ -658,6 +801,31 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 24),
+                      if (nextQueueOrder != null) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _primaryOrange,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                            onPressed: () => _goToNextOrder(context, nextQueueOrder),
+                            child: Text(
+                              () {
+                                final hm = _scheduledPickupHm(nextQueueOrder);
+                                final name =
+                                    _shortPassengerLabel(_passengerNameFromOrder(nextQueueOrder));
+                                return hm != null ? 'Следующий: $name · $hm' : 'Следующий: $name';
+                              }(),
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton(
@@ -675,7 +843,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: TextButton(
-                          onPressed: () => _onCompletedDismiss(context),
+                          onPressed: () => _offerNextOrderOrDismiss(context),
                           child: const Text('Готов к новому заказу', style: TextStyle(fontWeight: FontWeight.w600)),
                         ),
                       ),

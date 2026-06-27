@@ -244,7 +244,7 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
         }
       }
       await ref.read(invoApiProvider).patchOrderStatus(widget.orderId, next, reason: reason);
-      ref.invalidate(driverOrdersProvider);
+      invalidateDriverOrderQueue(ref);
       ref.invalidate(driverActiveOrderProvider);
       if (next == 'ride_ongoing') {
         final service = ref.read(cabinRecordingServiceProvider);
@@ -277,7 +277,7 @@ class _DriverNavigationScreenState extends ConsumerState<DriverNavigationScreen>
             'arrived_waiting',
             reason: 'Прибыл',
           );
-      ref.invalidate(driverOrdersProvider);
+      invalidateDriverOrderQueue(ref);
       ref.invalidate(driverActiveOrderProvider);
       widget.onStatusChanged?.call();
     } catch (e) {
