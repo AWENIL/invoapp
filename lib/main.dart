@@ -15,7 +15,16 @@ import 'theme/driver_auth_theme.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('ru');
-  runApp(const ProviderScope(child: _DriverPermissionsRoot()));
+  runApp(const ProviderScope(child: InvoDriverApp()));
+}
+
+class InvoDriverApp extends StatelessWidget {
+  const InvoDriverApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const _DriverPermissionsRoot();
+  }
 }
 
 enum _StartupPhase { loading, cameraRequired, ready }

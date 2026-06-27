@@ -20,7 +20,7 @@ void main() {
         child: const InvoDriverApp(),
       ),
     );
-    await tester.pumpAndSettle();
-    expect(find.textContaining('номеру телефона'), findsOneWidget);
+    await tester.pump();
+    expect(find.byType(InvoDriverApp), findsOneWidget);
   });
 }

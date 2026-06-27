@@ -363,7 +363,7 @@ packages:
   invo_common:
     dependency: "direct main"
     description:
-      path: "../invo_common"
+      path: invo_common
       relative: true
     source: path
     version: "0.1.0"
