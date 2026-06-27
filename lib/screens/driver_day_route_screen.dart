@@ -21,7 +21,16 @@ String _timeLabel(Map<String, dynamic> order) {
   if (raw == null) return '—';
   final dt = DateTime.tryParse(raw.toString());
   if (dt == null) return raw.toString();
-  return DateFormat('HH:mm').format(dt.toLocal());
+  final local = dt.toLocal();
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(local.year, local.month, local.day);
+  final hm = DateFormat('HH:mm').format(local);
+  if (day == today) return hm;
+  if (day == today.add(const Duration(days: 1))) {
+    return 'Завтра, $hm';
+  }
+  return '${DateFormat('d MMM', 'ru').format(local)}, $hm';
 }
 
 String _statusLabel(String? code) {
@@ -47,33 +56,42 @@ class DriverDayRouteScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final async = ref.watch(driverDayRouteProvider);
+    final async = ref.watch(driverOrdersProvider);
+    final dayRouteAsync = ref.watch(driverDayRouteProvider);
+    final dayIndex = dayRouteAsync.maybeWhen(
+      data: (route) {
+        final orders = route['orders'];
+        if (orders is! List) return <String, Map<String, dynamic>>{};
+        final map = <String, Map<String, dynamic>>{};
+        for (final o in orders) {
+          if (o is! Map) continue;
+          final id = o['id']?.toString();
+          if (id != null && id.isNotEmpty) {
+            map[id] = Map<String, dynamic>.from(o);
+          }
+        }
+        return map;
+      },
+      orElse: () => <String, Map<String, dynamic>>{},
+    );
+    final currentId = async.maybeWhen(
+      data: (orders) => orders.isNotEmpty ? orders.first['id']?.toString() : null,
+      orElse: () => dayRouteAsync.maybeWhen(
+        data: (route) => route['current_order_id']?.toString(),
+        orElse: () => null,
+      ),
+    );
 
     return Scaffold(
       backgroundColor: DriverAuthColors.background,
       appBar: AppBar(
-        title: async.when(
-          data: (route) {
-            final dateStr = route['date']?.toString() ?? '';
-            final parsed = DateTime.tryParse(dateStr);
-            final title = parsed != null
-                ? DateFormat('d MMMM yyyy', 'ru').format(parsed)
-                : 'Маршрут на день';
-            return Text(title);
-          },
-          loading: () => const Text('Маршрут на день'),
-          error: (_, _) => const Text('Маршрут на день'),
-        ),
+        title: const Text('Все заказы'),
       ),
       body: async.when(
         loading: () => const Center(child: CircularProgressIndicator(color: DriverAuthColors.primary)),
         error: (e, _) => Center(child: Padding(padding: const EdgeInsets.all(24), child: Text('$e'))),
-        data: (route) {
-          final orders = route['orders'];
-          final list = orders is List
-              ? orders.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-              : <Map<String, dynamic>>[];
-          final currentId = route['current_order_id']?.toString();
+        data: (orders) {
+          final list = orders;
 
           if (list.isEmpty) {
             return RefreshIndicator(
@@ -85,7 +103,7 @@ class DriverDayRouteScreen extends ConsumerWidget {
                   SizedBox(height: MediaQuery.sizeOf(context).height * 0.25),
                   Center(
                     child: Text(
-                      'На сегодня заказов нет',
+                      'Нет активных заказов',
                       style: theme.textTheme.titleMedium?.copyWith(
                         color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
                       ),
@@ -107,10 +125,14 @@ class DriverDayRouteScreen extends ConsumerWidget {
               itemBuilder: (context, i) {
                 final order = list[i];
                 final id = order['id']?.toString() ?? '';
-                final isCurrent = order['is_current'] == true || id == currentId;
+                final dayMeta = dayIndex[id];
+                final merged = dayMeta == null
+                    ? order
+                    : {...order, ...dayMeta};
+                final isCurrent = merged['is_current'] == true || id == currentId;
                 final isLast = i == list.length - 1;
                 return _TimelineOrderTile(
-                  order: order,
+                  order: merged,
                   isCurrent: isCurrent,
                   isLast: isLast,
                   onTap: id.isEmpty

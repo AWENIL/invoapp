@@ -91,8 +91,8 @@ class _DriverShellState extends ConsumerState<DriverShell> {
 
     final tabIndex = ref.watch(driverShellTabIndexProvider);
     final recording = ref.watch(cabinRecordingServiceProvider);
-    final queueCount = ref.watch(driverOrderQueueProvider).maybeWhen(
-          data: (q) => (q['count'] as num?)?.toInt() ?? 0,
+    final queueCount = ref.watch(driverTodayOrdersProvider).maybeWhen(
+          data: (orders) => orders.length,
           orElse: () => 0,
         );
     final showRecBadge = recording.isRecording ||

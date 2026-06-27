@@ -40,6 +40,21 @@ DateTime? _orderDateHint(Map<String, dynamic> o) {
   return DateTime.tryParse(raw?.toString() ?? '');
 }
 
+DateTime _localCalendarDay(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+/// Заказ относится к сегодняшнему дню (по локальному времени устройства).
+bool isDriverOrderToday(Map<String, dynamic> order) {
+  final dt = _orderDateHint(order);
+  if (dt == null) return true;
+  return _localCalendarDay(dt.toLocal()) == _localCalendarDay(DateTime.now());
+}
+
+List<Map<String, dynamic>> filterDriverOrdersForToday(
+  List<Map<String, dynamic>> orders,
+) {
+  return orders.where(isDriverOrderToday).toList();
+}
+
 /// Один порядок для главного списка и вкладки «Поездка» (первый — текущий к исполнению).
 List<Map<String, dynamic>> sortDriverActiveOrders(List<Map<String, dynamic>> orders) {
   final copy = orders.map((e) => Map<String, dynamic>.from(e)).toList();
@@ -110,6 +125,13 @@ final driverOrdersProvider =
     return sortDriverActiveOrders(list);
   }
   return [];
+});
+
+/// Активные заказы на сегодня — для главной вкладки «Заказ».
+final driverTodayOrdersProvider =
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  final orders = await ref.watch(driverOrdersProvider.future);
+  return filterDriverOrdersForToday(orders);
 });
 
 final driverHistoryOrdersProvider =

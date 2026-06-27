@@ -138,7 +138,7 @@ class OrdersTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final async = ref.watch(driverOrdersProvider);
+    final async = ref.watch(driverTodayOrdersProvider);
     final dayRouteAsync = ref.watch(driverDayRouteProvider);
     final dayIndex = dayRouteAsync.maybeWhen(
       data: _dayRouteOrderIndex,
@@ -160,8 +160,12 @@ class OrdersTab extends ConsumerWidget {
           );
           final routeTotal = dayRouteAsync.maybeWhen(
             data: (r) => (r['total_orders'] as num?)?.toInt(),
-            orElse: () => orders.length,
+            orElse: () => null,
           );
+          final allOrdersCount = ref.watch(driverOrdersProvider).maybeWhen(
+                data: (all) => all.length,
+                orElse: () => orders.length,
+              );
           final dateLabel = () {
             final parsed = DateTime.tryParse(routeDate ?? '');
             if (parsed != null) {
@@ -212,7 +216,7 @@ class OrdersTab extends ConsumerWidget {
                     ),
                   ),
                 ),
-                if (orders.isNotEmpty)
+                if (allOrdersCount > 0)
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -245,7 +249,9 @@ class OrdersTab extends ConsumerWidget {
                                         ),
                                       ),
                                       Text(
-                                        '$routeTotal заказов',
+                                        routeTotal != null
+                                            ? '$routeTotal на сегодня · $allOrdersCount всего'
+                                            : '$allOrdersCount заказов',
                                         style: theme.textTheme.bodySmall?.copyWith(
                                           color: DriverAuthColors.secondaryText,
                                         ),
@@ -276,7 +282,7 @@ class OrdersTab extends ConsumerWidget {
                       child: Padding(
                         padding: const EdgeInsets.all(32),
                         child: Text(
-                          'Нет активных заказов',
+                          'Нет заказов на сегодня',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.titleMedium?.copyWith(
                             color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
