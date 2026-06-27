@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:invo_common/invo_common.dart';
 import 'package:invo_common/widgets/driver_navigation_map_embed_io.dart'
-    show DriverNavFollowFn, DriverNavStartFn, DriverNavUpdateFn;
+    show DriverNavFollowFn, DriverNavStartFn, DriverNavUpdateFn, DriverNavigationMapEmbed;
 
 class DriverNavigationMap extends StatefulWidget {
   const DriverNavigationMap({
